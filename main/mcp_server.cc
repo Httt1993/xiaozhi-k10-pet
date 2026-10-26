@@ -574,6 +574,10 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
     }
 
     McpTool* tool = tool_iter->get();
+    // PET_PATCH_MARK: 记录模型实际调用了哪个工具。
+    // 排查"灯亮了又灭"这类问题时，没有这行日志就分不清模型调的是
+    // self.led_strip.set_all_color 还是 self.pet.set_mood。
+    ESP_LOGI(TAG, "Call tool: %s", tool_name.c_str());
     PropertyList arguments = tool->properties();
     for (auto& argument : arguments) {
         bool found = false;

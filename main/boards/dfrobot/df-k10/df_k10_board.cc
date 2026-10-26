@@ -258,7 +258,12 @@ private:
     // 物联网初始化，添加对 AI 可见设备
     void InitializeIot() {
         led_strip_ = new PetStrip(BUILTIN_LED_GPIO, 3);   // PET_PATCH_MARK
-        new LedStripControl(led_strip_);
+        // ★ 刻意不注册官方 LedStripControl：
+        // 官方 self.led_strip.set_all_color 走的是基类非虚函数，PetStrip 拦不住，
+        // 实测模型遇到"把心情设成蓝色"会优先调它 → 灯亮一下，回到 idle 就被 FadeOut 抹掉
+        // （实测现象：亮蓝灯→渐变→熄灭，mood_active_ 始终 false）。
+        // 去掉后模型只能走 self.pet.set_mood，灯语才会持久。
+        // new LedStripControl(led_strip_);   // PET_NO_LED_STRIP_TOOL
         // 注册宠物板载工具：灯语 / 表情 / 传感器
         pet_tools_ = new PetTools(led_strip_, display_, i2c_bus_);
     }
