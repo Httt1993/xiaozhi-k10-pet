@@ -901,6 +901,19 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_color(container_, lvgl_theme->background_color(), 0);
     lv_obj_set_style_border_color(container_, lvgl_theme->border_color(), 0);
 
+#ifdef PET_FACE_AVAILABLE
+    /* 宠物猫脸：普通样式分支（K10 走这条）。这里的 container_ 只是一层纯色背景，
+     * 真正的 UI 都直接挂在 screen 上，所以猫脸也挂 screen，并压到 container_ 之上、
+     * 其它 UI 之下（index 1）。 */
+    pet_face_img_ = lv_img_create(screen);
+    lv_img_set_src(pet_face_img_, &pet_face_idle);
+    lv_obj_remove_flag(pet_face_img_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(pet_face_img_, 0, 0);
+    lv_obj_move_to_index(pet_face_img_, 1);
+    ESP_LOGI(TAG, "PET_PATCH: pet face enabled as background (%dx%d) [normal style]",
+             pet_face_idle.header.w, pet_face_idle.header.h);
+#endif
+
     /* Bottom layer: emoji_box_ - centered display */
     emoji_box_ = lv_obj_create(screen);
     lv_obj_set_size(emoji_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -917,6 +930,14 @@ void LcdDisplay::SetupUI() {
     emoji_image_ = lv_img_create(emoji_box_);
     lv_obj_center(emoji_image_);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
+
+#ifdef PET_FACE_AVAILABLE
+    /* 猫脸模式：emoji_box_ 里预置了一个机器人图标（MATERIAL_SYMBOLS_ROBOT_2），
+     * 不隐藏的话会正好压在我们猫脸中间。 */
+    if (pet_face_img_ != nullptr) {
+        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 
     /* Middle layer: preview_image_ - centered display */
     preview_image_ = lv_image_create(screen);
