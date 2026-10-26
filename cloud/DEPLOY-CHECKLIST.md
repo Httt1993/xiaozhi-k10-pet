@@ -125,6 +125,26 @@ https://pet-cloud-1234567890.ap-guangzhou.tencentscf.com/
 
 ---
 
+## 以后改了云端代码：怎么重新部署（不用重建函数）
+
+函数建好之后再改 `cloud/scf/*.js`，只需要换代码，别的都不用动：
+
+1. 本机打新包并自检
+
+   ```bash
+   cd k10-pet-build/cloud
+   node build.mjs          # 48 项自检全过才出包
+   node build.mjs --check  # 确认 zip 和源码一致
+   ```
+
+2. 控制台进 **函数管理 → 函数代码**，右上角 **本地上传 zip 包** → 选 `cloud/dist/pet-cloud-scf.zip` → 点 **部署**
+3. 等状态回到「正常」（十几秒），刷新函数 URL，自检页标题后面的版本号会变
+
+环境变量（`PET_KEY` / `PET_NAME`）不会因为换代码而丢，不用重填。
+**固件也不用重烧** —— 只要 `PET_CLOUD_URL` 和口令没变，设备那边什么都不用做。
+
+---
+
 ## 常见坑（按踩过的概率排序）
 
 | 现象                                    | 原因                         | 解法                                                     |

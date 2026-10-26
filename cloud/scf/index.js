@@ -18,7 +18,7 @@ const core = require('./pet-core');
 const store = require('./store');
 const parent = require('./parent');
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 /**
  * 家长看板可以触发的动作。
