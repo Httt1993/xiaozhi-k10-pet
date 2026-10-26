@@ -18,13 +18,11 @@
 
 #include "board.h"
 
-/* PET_PATCH_MARK: 只有当前板子目录里存在 pet_face.h 时才启用宠物猫脸，
- * 这样同一份 display 代码在其他板子上完全不受影响。 */
-#if defined(__has_include)
-#  if __has_include("pet_face.h")
-#    include "pet_face.h"
-#    define PET_FACE_AVAILABLE 1
-#  endif
+/* PET_PATCH_MARK: 宠物猫脸。由 CMakeLists.txt 在"板级目录存在 pet_face.h"时
+ * 定义 PET_FACE_ENABLE=1（并加好 include 路径），其他板子完全不受影响。 */
+#ifdef PET_FACE_ENABLE
+#  include "pet_face.h"
+#  define PET_FACE_AVAILABLE 1
 #endif
 
 #define TAG "LcdDisplay"

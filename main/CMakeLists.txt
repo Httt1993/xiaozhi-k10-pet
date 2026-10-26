@@ -934,9 +934,6 @@ file(GLOB BOARD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.c
 )
 list(APPEND SOURCES ${BOARD_SOURCES})
-# PET_PATCH_MARK: 让通用代码（如 display/lcd_display.cc）能按名字 include 板级头文件，
-# 配合 __has_include 实现"只有该板子存在某资源时才启用"的效果。
-list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR})
 
 # Select one audio engine for each chip family
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
@@ -1181,6 +1178,15 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
                         PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
                         PRIVATE TEXT_FONT_SIZE=${TEXT_FONT_SIZE} TEXT_FONT_BPP=${TEXT_FONT_BPP}
                         )
+
+    # PET_PATCH_MARK: 宠物猫脸。用 CMake 显式判定，不依赖 __has_include
+    # （实测 __has_include("pet_face.h") 在本工程里返回 false，导致图片被 gc-sections 丢掉）。
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/pet_face.h")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE PET_FACE_ENABLE=1)
+        target_include_directories(${COMPONENT_LIB} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}")
+        message(STATUS "PET_PATCH: pet face enabled for board ${BOARD_DIR}")
+    endif()
     # ESP32-S3 LVGL builtin pool: PSRAM boards allocate it from PSRAM.
     # Boards that set CONFIG_SPIRAM=n must not keep the 1MB chip-default
     # pool as a .dram0.bss array (build.py also switches those variants
