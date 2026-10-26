@@ -754,7 +754,9 @@ PetActionResult PetCloud::ActLocal(const std::string& action, const std::string&
         }
     };
 
-    if (throttled && action != "sync" && action != "task_list" && action != "coins") {
+    /* 节流只针对「宠物动作」：家长连说两个任务、孩子连续报备都不该被拦 */
+    bool is_task_action = action.compare(0, 5, "task_") == 0;
+    if (throttled && action != "sync" && action != "coins" && !is_task_action) {
         out.ok = false;
         out.code = "TOO_FAST";
         out.say = "慢一点点啦，我还没反应过来～";
@@ -910,36 +912,59 @@ PetActionResult PetCloud::ActLocal(const std::string& action, const std::string&
         out.code = "PET";
         out.say = kLines[static_cast<int>((now > 0 ? now : 0) % 3)];
     } else if (action == "story" || action == "song" || action == "teach") {
-        /* 免费互动：本地不维护每日计数器（那需要和云端一致的 counters），
-         * 所以离线时只做数值不加计数，联网后云端会重新按真实计数约束。 */
-        if (action == "story") {
-            const char* topic = args ? GetStr(args, "topic", "") : "";
-            mood = Clamp100(mood + 10);
-            energy = Max0(energy - 2);
-            exp += kExpPerAction * 2;
-            touch();
-            out.ok = true;
-            out.code = "STORY";
-            std::string t = (topic != nullptr && topic[0] != '\0') ? topic : "恐龙";
-            out.say = "好呀，我给你讲一个关于" + t + "的故事——从前有一只小宠物，它……";
-        } else if (action == "song") {
-            mood = Clamp100(mood + 12);
-            energy = Max0(energy - 3);
-            exp += kExpPerAction * 2;
-            touch();
-            out.ok = true;
-            out.code = "SONG";
-            out.say = "啦啦啦～我唱歌给你听！";
+        /* 免费互动每天限次。本地也要管住，否则离线就成了「无限刷心情」，
+         * 家长布置的任务体系会失去意义。计数器存在 pet.counters 里，与云端同结构。 */
+        const char* key = action == "story" ? "story" : (action == "song" ? "sing" : "teach");
+        const char* label = action == "story" ? "讲故事" : (action == "song" ? "唱歌" : "学东西");
+        int64_t day = DayStart(now > 0 ? now : 0);
+
+        cJSON* counters = cJSON_GetObjectItem(p, "counters");
+        if (!cJSON_IsObject(counters) || GetI64(counters, "day", 0) != day) {
+            cJSON_DeleteItemFromObject(p, "counters");
+            counters = cJSON_AddObjectToObject(p, "counters");
+            cJSON_AddNumberToObject(counters, "day", static_cast<double>(day));
+        }
+        int used = GetInt(counters, key, 0);
+
+        if (used >= kDailyFunCap) {
+            out.ok = false;
+            out.code = "DAILY_CAP";
+            out.say = std::string("今天已经") + label + " " + std::to_string(used) +
+                      " 次啦，我们先做点别的，或者把今天的事情做完再来～";
         } else {
-            const char* what = args ? GetStr(args, "what", "") : "";
-            mood = Clamp100(mood + 8);
-            energy = Max0(energy - 2);
-            exp += kExpPerAction * 2;
-            touch();
-            out.ok = true;
-            out.code = "TEACH";
-            out.say = (what != nullptr && what[0] != '\0') ? ("好呀，我想学" + std::string(what) + "！你教我吧～")
-                                                           : "好呀，我想学新东西！你教我吧～";
+            cJSON_DeleteItemFromObject(counters, key);
+            cJSON_AddNumberToObject(counters, key, used + 1);
+
+            if (action == "story") {
+                const char* topic = args ? GetStr(args, "topic", "") : "";
+                mood = Clamp100(mood + 10);
+                energy = Max0(energy - 2);
+                exp += kExpPerAction * 2;
+                touch();
+                out.ok = true;
+                out.code = "STORY";
+                std::string t = (topic != nullptr && topic[0] != '\0') ? topic : "恐龙";
+                out.say = "好呀，我给你讲一个关于" + t + "的故事——从前有一只小宠物，它……";
+            } else if (action == "song") {
+                mood = Clamp100(mood + 12);
+                energy = Max0(energy - 3);
+                exp += kExpPerAction * 2;
+                touch();
+                out.ok = true;
+                out.code = "SONG";
+                out.say = "啦啦啦～我唱歌给你听！";
+            } else {
+                const char* what = args ? GetStr(args, "what", "") : "";
+                mood = Clamp100(mood + 8);
+                energy = Max0(energy - 2);
+                exp += kExpPerAction * 2;
+                touch();
+                out.ok = true;
+                out.code = "TEACH";
+                out.say = (what != nullptr && what[0] != '\0')
+                              ? ("好呀，我想学" + std::string(what) + "！你教我吧～")
+                              : "好呀，我想学新东西！你教我吧～";
+            }
         }
     } else if (action == "chat") {
         mood = Clamp100(mood + 1);
@@ -955,10 +980,144 @@ PetActionResult PetCloud::ActLocal(const std::string& action, const std::string&
         out.ok = true;
         out.code = "TASKS";
         out.say = "";
+
+    /* ---- 本地任务：离线时也完整可用，不让「养成」缺一半 ---- */
     } else if (action.compare(0, 5, "task_") == 0) {
-        out.ok = false;
-        out.code = "OFFLINE";
-        out.say = "现在没连上网，任务要等联网才能报备哦。";
+        std::string title = args ? GetStr(args, "title", "") : "";
+        cJSON* tasks = cJSON_GetObjectItem(root, "tasks");
+        if (!cJSON_IsArray(tasks)) {
+            cJSON_DeleteItemFromObject(root, "tasks");
+            tasks = cJSON_AddArrayToObject(root, "tasks");
+        }
+
+        /* 找任务：优先在 pending 里找，避免同名旧任务被误命中 */
+        auto findByTitle = [&](bool pending_only) -> cJSON* {
+            cJSON* hit = nullptr;
+            cJSON* it = nullptr;
+            cJSON_ArrayForEach(it, tasks) {
+                const char* t = GetStr(it, "title", "");
+                if (t == nullptr || t[0] == '\0') {
+                    continue;
+                }
+                if (strstr(t, title.c_str()) == nullptr) {
+                    continue;
+                }
+                if (pending_only && strcmp(GetStr(it, "status", ""), "pending") != 0) {
+                    continue;
+                }
+                hit = it;
+                break;
+            }
+            return hit;
+        };
+
+        if (action == "task_publish") {
+            if (title.empty()) {
+                out.ok = false;
+                out.code = "EMPTY";
+                out.say = "任务名不能为空。";
+            } else {
+                int reward = args ? GetInt(args, "reward", 10) : 10;
+                reward = reward < 1 ? 1 : (reward > 999 ? 999 : reward);
+                char idbuf[32];
+                snprintf(idbuf, sizeof(idbuf), "t%llx%x",
+                         static_cast<long long>(now > 0 ? now : 0),
+                         static_cast<unsigned>(cJSON_GetArraySize(tasks)));
+                cJSON* t = cJSON_CreateObject();
+                cJSON_AddStringToObject(t, "id", idbuf);
+                cJSON_AddStringToObject(t, "title", title.c_str());
+                cJSON_AddNumberToObject(t, "reward", reward);
+                cJSON_AddStringToObject(t, "status", "pending");
+                cJSON_AddNumberToObject(t, "createdAt", static_cast<double>(now > 0 ? now : 0));
+                cJSON_AddItemToArray(tasks, t);
+                /* 与云端 TASK_KEEP 一致，防止 state 撑爆 NVS */
+                while (cJSON_GetArraySize(tasks) > 12) {
+                    cJSON_DeleteItemFromArray(tasks, 0);
+                }
+                out.ok = true;
+                out.code = "TASK_PUBLISH";
+                out.say = "已发布任务「" + title + "」，奖励 " + std::to_string(reward) + " 枚游戏币。";
+            }
+        } else if (title.empty()) {
+            out.ok = false;
+            out.code = "EMPTY";
+            out.say = "要告诉我任务名字，孩子才知道做哪一件。";
+        } else if (action == "task_submit") {
+            cJSON* t = findByTitle(true);
+            if (t == nullptr) {
+                t = findByTitle(false);
+            }
+            if (t == nullptr) {
+                out.ok = false;
+                out.code = "NOT_FOUND";
+                out.say = "我没找到「" + title + "」这个任务哦，你可以问家长今天要做什么。";
+            } else {
+                const char* st = GetStr(t, "status", "");
+                if (strcmp(st, "submitted") == 0) {
+                    out.ok = false;
+                    out.code = "DUPLICATE";
+                    out.say = "「" + title + "」你已经报备过啦，等家长确认就好。";
+                } else if (strcmp(st, "done") == 0) {
+                    out.ok = false;
+                    out.code = "DONE";
+                    out.say = "「" + title + "」已经完成并且发过币啦，换一个任务试试？";
+                } else {
+                    int reward = GetInt(t, "reward", 10);
+                    cJSON_DeleteItemFromObject(t, "status");
+                    cJSON_AddStringToObject(t, "status", "submitted");
+                    cJSON_DeleteItemFromObject(t, "submittedAt");
+                    cJSON_AddNumberToObject(t, "submittedAt",
+                                            static_cast<double>(now > 0 ? now : 0));
+                    out.ok = true;
+                    out.code = "TASK_SUBMIT";
+                    out.say = "「" + title + "」我记下啦，等家长确认后给你发 " +
+                              std::to_string(reward) + " 枚游戏币！";
+                }
+            }
+        } else if (action == "task_approve") {
+            cJSON* t = findByTitle(true);
+            if (t == nullptr) {
+                t = findByTitle(false);
+            }
+            if (t == nullptr) {
+                out.ok = false;
+                out.code = "NOT_FOUND";
+                out.say = "没找到这个任务。";
+            } else if (strcmp(GetStr(t, "status", ""), "done") == 0) {
+                out.ok = false;
+                out.code = "ALREADY";
+                out.say = "该任务已经发过币了。";
+            } else {
+                int reward = GetInt(t, "reward", 10);
+                cJSON_DeleteItemFromObject(t, "status");
+                cJSON_AddStringToObject(t, "status", "done");
+                cJSON_DeleteItemFromObject(t, "doneAt");
+                cJSON_AddNumberToObject(t, "doneAt", static_cast<double>(now > 0 ? now : 0));
+                coins += reward;
+                out.ok = true;
+                out.code = "TASK_APPROVE";
+                out.say = "已确认「" + std::string(GetStr(t, "title", "")) + "」，发放 " +
+                          std::to_string(reward) + " 枚游戏币。";
+            }
+        } else if (action == "task_reject") {
+            cJSON* t = findByTitle(true);
+            if (t == nullptr) {
+                out.ok = false;
+                out.code = "NOT_FOUND";
+                out.say = "没找到这个任务。";
+            } else {
+                cJSON_DeleteItemFromObject(t, "status");
+                cJSON_AddStringToObject(t, "status", "pending");
+                cJSON_DeleteItemFromObject(t, "submittedAt");
+                out.ok = true;
+                out.code = "TASK_REJECT";
+                out.say = "「" + title + "」先退回，让孩子再检查一下。";
+            }
+        } else {
+            out.ok = false;
+            out.code = "UNKNOWN_ACTION";
+            out.say = "不认识的任务操作：" + action;
+        }
     } else if (action == "reset") {
         /* 清掉内存和 NVS，下一次进来会按初值重建 */
         state_json_.clear();
