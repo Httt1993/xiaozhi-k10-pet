@@ -62,6 +62,11 @@ private:
     bool th_ok_ = false;
     bool light_ok_ = false;
     bool accel_ok_ = false;
+
+    /* LTR-303 的 lux 归一化系数 = 增益 × (积分时间/100ms)。
+     * 由 InitLight 从芯片里回读 ALS_CONTR / ALS_MEAS_RATE 算出来，
+     * 不写死常量 —— 以后改增益或积分时间，换算自动跟着走，不会再算错。 */
+    float light_scale_ = 1.0f;
 };
 
 #else  // PET_ENABLE_SENSORS == 0 → 空壳，编译进来但什么都不做

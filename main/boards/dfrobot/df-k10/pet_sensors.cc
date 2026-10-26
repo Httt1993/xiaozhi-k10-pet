@@ -11,14 +11,6 @@
 
 #if PET_ENABLE_SENSORS
 
-/*
- * LTR-303 当前配置：增益 4×、积分 400ms。
- * 相对「1× / 100ms」的基准灵敏度是 4 × 4 = 16 倍，
- * 所以把原始计数除以 16 就近似回到「1 计数 ≈ 1 lux」的基准，
- * 这也是下面 lux 换算的唯一依据。改初始化里的增益/积分时间，必须同步改这里。
- */
-static constexpr float kLightScale = 16.0f;
-
 static inline void pet_delay_ms(int ms) {
     vTaskDelay(pdMS_TO_TICKS(ms));
 }
@@ -163,10 +155,10 @@ void PetSensors::InitLight() {
     if (ReadReg(PET_LTR303_ADDR, 0x87, &manu, 1) != ESP_OK) {
         ESP_LOGW(TAG, "LTR303 MANUFAC_ID 读失败");
     }
-    // LTR-303ALS-01: PART_ID=0xA3 MANUFAC_ID=0x05
+    // 实测这块板子是 LTR-303ALS-01：PART_ID=0xA0 MANUFAC_ID=0x05（0xA3 是别家文档里的写法）
     // LTR-329ALS-01: PART_ID=0x0A MANUFAC_ID=0x05
     // LTR-553ALS-01: PART_ID=0x50 MANUFAC_ID=0x05
-    ESP_LOGI(TAG, "LTR303 PART_ID=0x%02X MANUFAC_ID=0x%02X (expect 0xA3/0x0A/0x50 + 0x05)",
+    ESP_LOGI(TAG, "LTR303 PART_ID=0x%02X MANUFAC_ID=0x%02X (expect 0xA0/0x0A/0x50 + 0x05)",
              part, manu);
     if (manu != 0x05) {
         ESP_LOGW(TAG, "LTR303 厂商 ID 不是 0x05，光照读数可能不可信（继续尝试）");
@@ -191,6 +183,30 @@ void PetSensors::InitLight() {
     }
     pet_delay_ms(600);  // 400ms 积分时间，留足一次完整转换（周期 500ms）
 
+    /*
+     * ★ 不假设寄存器写成功，直接回读确认，并按回读值算 lux 归一化系数。
+     * 这样即使某次写入没生效，换算也不会跟着错 —— 之前就是靠猜倍数，
+     * 结果 CH0 只涨了 4 倍而不是 16 倍，无法判断是「环境光真的变暗」还是「积分时间没写进去」。
+     */
+    uint8_t rb_contr = 0;
+    uint8_t rb_rate = 0;
+    ReadReg(PET_LTR303_ADDR, 0x80, &rb_contr, 1);
+    ReadReg(PET_LTR303_ADDR, 0x85, &rb_rate, 1);
+
+    // ALS_CONTR bit[4:3] = 增益档：00=1x 01=2x 10=4x 11=8x
+    static const float kGainTable[4] = {1.0f, 2.0f, 4.0f, 8.0f};
+    float gain = kGainTable[(rb_contr >> 3) & 0x03];
+    // ALS_MEAS_RATE bit[5:3] = 积分时间档（单位 ms）
+    static const int kIntTable[8] = {100, 50, 200, 400, 150, 250, 300, 350};
+    int int_ms = kIntTable[(rb_rate >> 3) & 0x07];
+    light_scale_ = gain * (static_cast<float>(int_ms) / 100.0f);
+    if (light_scale_ < 1.0f) {
+        light_scale_ = 1.0f;
+    }
+    ESP_LOGI(TAG, "LTR303 回读 ALS_CONTR=0x%02X ALS_MEAS_RATE=0x%02X → 增益 %.0fx / 积分 %dms / 系数 %.1f",
+             rb_contr, rb_rate, static_cast<double>(gain), int_ms,
+             static_cast<double>(light_scale_));
+
     // 光靠"写入成功"不算数，必须真读到非零数据才算可用
     uint8_t probe[4] = {0};
     uint16_t ch0_first = 0;
@@ -201,9 +217,10 @@ void PetSensors::InitLight() {
         ESP_LOGW(TAG, "LTR303 数据全 1（0xFFFF），光照不可用");
         return;
     }
-    ESP_LOGI(TAG, "LTR303 首次采样 CH0=%u CH1=%u → 约 %.1f lux（增益4x/积分400ms）",
+    ESP_LOGI(TAG, "LTR303 首次采样 CH0=%u CH1=%u → 约 %.1f lux（系数 %.1f）",
              ch0_first, static_cast<unsigned>((probe[1] << 8) | probe[0]),
-             static_cast<double>(ch0_first / kLightScale));
+             static_cast<double>(ch0_first / light_scale_),
+             static_cast<double>(light_scale_));
     light_ok_ = true;
 }
 
@@ -274,7 +291,7 @@ bool PetSensors::ReadLight(uint16_t& ch0, uint16_t& ch1, float& lux) {
      * 直接用 CH0 归一化就足够判断「房间亮不亮」。刻意不减 CH1：
      * 白炽灯/暖光下 CH1 占比很高，相减会把读数压到 0，反而误判成「黑的」。
      */
-    lux = static_cast<float>(ch0) / kLightScale;
+    lux = static_cast<float>(ch0) / light_scale_;
     if (lux < 0.0f) {
         lux = 0.0f;
     }
