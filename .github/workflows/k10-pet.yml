@@ -1,0 +1,82 @@
+name: Build K10 Pet Firmware
+
+# 用法：Actions 页面 → 左侧选 "Build K10 Pet Firmware" → Run workflow → 等 8~15 分钟
+#      → 打开这次运行 → 页面底部 Artifacts 下载 k10-pet-firmware → 里面是 merged-binary.bin
+#
+# 为什么不在本地编：本地装 ESP-IDF 要下 2~3GB 工具链。这里直接借用官方 CI 用的同一个
+# espressif/idf:v6.1 镜像，环境与官方发布完全一致，你只需要一个 GitHub 账号。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build dfrobot/df-k10
+    runs-on: ubuntu-latest
+    container:
+      # 必须与 78/xiaozhi-esp32 官方 CI 用同一个镜像，否则构建脚本行为可能不一致
+      image: espressif/idf:v6.1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # 构建脚本会读 git 信息做版本号，浅克隆会拿不到
+          fetch-depth: 0
+
+      - name: 确认补丁在仓库里
+        shell: bash
+        run: |
+          set -e
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          D=main/boards/dfrobot/df-k10
+          echo "--- 板级目录 ---"
+          ls -1 "$D"
+          echo "--- 必须存在的 7 个补丁文件 ---"
+          for f in pet_config.h pet_strip.h pet_strip.cc pet_sensors.h pet_sensors.cc pet_tools.h pet_tools.cc; do
+            test -f "$D/$f" || { echo "::error::缺文件 $D/$f，补丁没提交完整"; exit 1; }
+            echo "  ok  $f"
+          done
+          echo "--- 板级改动锚点 ---"
+          N=$(grep -c "PET_PATCH_MARK" "$D/df_k10_board.cc")
+          echo "PET_PATCH_MARK 出现 $N 次（应为 3）"
+          test "$N" -ge 3 || { echo "::error::df_k10_board.cc 的补丁没打上"; exit 1; }
+          grep -q "new PetTools(" "$D/df_k10_board.cc" || { echo "::error::PetTools 没有注册"; exit 1; }
+
+      - name: 编译
+        shell: bash
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py dfrobot/df-k10 --name df-k10
+
+      - name: 确认产物
+        shell: bash
+        run: |
+          set -e
+          ls -lh build/merged-binary.bin
+          # merged-binary.bin 烧到 0x0，正常应该 4MB 左右；太小说明合成失败
+          SZ=$(stat -c%s build/merged-binary.bin)
+          echo "字节数：$SZ"
+          test "$SZ" -gt 1000000 || { echo "::error::产物异常偏小，合成可能失败"; exit 1; }
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v7
+        with:
+          name: k10-pet-firmware
+          path: build/merged-binary.bin
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 失败时上传日志
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k10-build-log
+          path: |
+            build/log/
+            build/*.log
+          if-no-files-found: ignore
+          retention-days: 7
