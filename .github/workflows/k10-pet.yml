@@ -18,9 +18,9 @@ on:
         required: false
         default: ''
       heartbeat_sec:
-        description: '心跳间隔秒数（300 = 5 分钟，0 = 关闭）'
+        description: '心跳间隔秒数（60 = 1 分钟，300 = 5 分钟，0 = 关闭）'
         required: false
-        default: '300'
+        default: '60'
 
 permissions:
   contents: read

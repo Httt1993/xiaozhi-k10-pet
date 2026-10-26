@@ -311,9 +311,15 @@ ok(r.ok && r.item === 'cookie', '不传 food 参数时用默认食物');
 // ==================================================================== 10. 配置覆盖
 section('10. 环境变量覆盖数值');
 
-r = core.run({ action: 'sync', state: null, args: {}, ts: t0 }, { PET_NAME: '小白', INIT_COINS: '99' });
+r = core.run({ action: 'sync', state: null, args: {}, ts: t0 }, { PET_NAME: '小白', PET_INIT_COINS: '99' });
 eq(r.status.name, '小白', 'PET_NAME 可覆盖');
-eq(r.status.coins, 99, 'INIT_COINS 可覆盖');
+eq(r.status.coins, 99, 'PET_INIT_COINS 可覆盖（带 PET_ 前缀）');
+
+r = core.run({ action: 'sync', state: null, args: {}, ts: t0 }, { INIT_COINS: '77' });
+eq(r.status.coins, 77, '不带前缀的 INIT_COINS 也认（兼容旧写法）');
+
+r = core.run({ action: 'sync', state: null, args: {}, ts: t0 }, { PET_NAME: '甲', NAME: '乙' });
+eq(r.status.name, '甲', '两种写法同时存在时 PET_ 前缀优先');
 
 // ==================================================================== 汇总
 console.log('\n' + '─'.repeat(50));
