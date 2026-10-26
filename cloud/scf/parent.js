@@ -156,8 +156,9 @@ function render(){
   if(!data||!data.ok){ return; }
   var st=data.status;
   if(!st){
-    el('body').innerHTML='<div class="card"><div class="empty">还没有收到设备上报。<br>'+
-      '让孩子对小智说一句「你好」，这里就有数据了。</div></div>';
+    el('body').innerHTML='<div class="card"><div class="empty">这一会儿还没有设备上报的数据。<br>'+
+      '设备每 5 分钟自动上报一次，最多等 5 分钟；<br>'+
+      '如果设备关机或断网，要等它开机连上 Wi-Fi 才会有。</div></div>';
     return;
   }
   var live=data.age_sec!=null&&data.age_sec<1800;
@@ -223,13 +224,15 @@ function render(){
     html+='<div class="card"><h2>等待送达</h2>';
     for(var k=0;k<data.pending.length;k++){
       html+='<div class="ev"><time>'+fmtTime(data.pending[k].at)+'</time><span>'+
-        (data.pending[k].note||data.pending[k].action)+' · 等孩子下次跟小智说话时生效</span></div>';
+        (data.pending[k].note||data.pending[k].action)+' · 等设备下次心跳或孩子说话时生效</span></div>';
     }
     html+='</div>';
   }
 
-  html+='<footer>指令会先排队，孩子下次和小智说话时才会送达设备。<br>'+
-    '存储方式：'+(data.backend==='file'?'本地文件':'云端内存')+'</footer>';
+  html+='<footer>指令先排队，设备下次心跳（最多 5 分钟）或孩子跟小智说话时送达。<br>'+
+    '存储方式：'+(data.backend==='file'?'本地文件':'云端内存（云函数热实例）')+
+    (data.backend==='file'?'':'——实例被回收时排队中的指令会丢，设备离线超过十分钟就别急着点')+
+    '</footer>';
 
   el('body').innerHTML=html;
   bind();

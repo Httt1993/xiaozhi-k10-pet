@@ -403,10 +403,37 @@ bool PetCloud::HeartbeatEligible() {
 void PetCloud::HeartbeatTask(void* arg) {
     auto* self = static_cast<PetCloud*>(arg);
 
-    /* 开机头 30 秒让路：激活、OTA 校时、AFE 初始化都在这个窗口里 */
+    /* 开机头 30 秒让路：激活、OTA 校时、AFE 初始化都在这个窗口里。
+       30 秒一过先同步一次 —— 家长在网页上点的指令，孩子一开机就该到，
+       没必要让第一条指令等满一个心跳周期。 */
     vTaskDelay(pdMS_TO_TICKS(30000));
 
     while (true) {
+        if (!self->cloud_enabled()) {
+            vTaskDelay(pdMS_TO_TICKS(60000));
+            continue;
+        }
+        if (!self->HeartbeatEligible()) {
+            /* 正在说话/升级/配网。这里绝不按整周期等 —— 否则一次撞上说话，
+               指令要再等 5 分钟，家长会以为按钮坏了。15 秒后再看。 */
+            vTaskDelay(pdMS_TO_TICKS(15000));
+            continue;
+        }
+
+        PetActionResult r = self->Act("sync", "{}");
+        if (r.ok) {
+            self->heartbeat_ok_++;
+            self->fail_streak_ = 0;
+            ESP_LOGI(TAG, "PET_PATCH: 心跳 sync ok %dms hunger=%d coins=%d fail=%d",
+                     self->last_latency_ms_, self->status_.hunger, self->status_.coins,
+                     self->fail_streak_);
+        } else {
+            self->heartbeat_fail_++;
+            self->fail_streak_++;
+            ESP_LOGW(TAG, "PET_PATCH: 心跳 sync 失败 %s（累计 %d 次）",
+                     r.error.empty() ? "未知原因" : r.error.c_str(), self->heartbeat_fail_);
+        }
+
         int wait_sec = self->heartbeat_sec_;
         if (self->fail_streak_ >= 3) {
             /* 断网时别按原频率硬撞，退避到最多 15 分钟 */
@@ -416,25 +443,6 @@ void PetCloud::HeartbeatTask(void* arg) {
             }
         }
         vTaskDelay(pdMS_TO_TICKS(wait_sec * 1000));
-
-        if (!self->cloud_enabled()) {
-            continue;
-        }
-        if (!self->HeartbeatEligible()) {
-            continue;
-        }
-
-        PetActionResult r = self->Act("sync", "{}");
-        if (r.ok) {
-            self->heartbeat_ok_++;
-            ESP_LOGI(TAG, "PET_PATCH: 心跳 sync ok %dms hunger=%d coins=%d fail=%d",
-                     self->last_latency_ms_, self->status_.hunger, self->status_.coins,
-                     self->fail_streak_);
-        } else {
-            self->heartbeat_fail_++;
-            ESP_LOGW(TAG, "PET_PATCH: 心跳 sync 失败 %s（累计 %d 次）",
-                     r.error.empty() ? "未知原因" : r.error.c_str(), self->heartbeat_fail_);
-        }
     }
 }
 
