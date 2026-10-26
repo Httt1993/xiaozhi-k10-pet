@@ -38,12 +38,13 @@ static const lv_color_t kInk = lv_color_hex(0x1A1210);      /* 与原图眼/嘴�
 static const lv_color_t kWhite = lv_color_hex(0xFFFFFF);
 static const lv_color_t kTongue = lv_color_hex(0xE8748C);
 
-/* 每个表情一套参数。eye_h=0 表示不用实心椭圆眼 */
+/* 每个表情一套参数。eye_h=0 表示不用实心椭圆眼（改用弧线眼） */
 struct ExprStyle {
     int eye_w, eye_h, eye_y;   /* 实心椭圆眼尺寸与左上角 y（x 由中心推） */
     int arc_w;                 /* 弧线眼宽度，0 = 不用 */
     int arc_thick;
-    int arc_top;               /* 弧线眼可见弧的最高点 y */
+    int arc_top;               /* 弧线眼对象的左上角 y */
+    int arc_down;              /* 0 = 只留 top 边（∩ 笑眼）；1 = 只留 bottom（∪ 闭眼） */
     int hl_pct;                /* 高光缩放百分比，0 = 不显示 */
     int mouth_mode;            /* 0=ω 1=单弧 2=小圆 3=张大嘴 */
     int mouth_w;
@@ -55,16 +56,16 @@ struct ExprStyle {
  * neutral: 和原图一致 —— 大圆眼 + ω 嘴
  * happy  : ∩ 笑眼 + 宽 ∪ 笑嘴
  * sad    : 眼略小且下移 + ∩ 哭嘴（弧顶压在鼻尖下方）
- * sick   : 眼睛压成一条（半闭）+ 小圆嘴
- * hungry : 眼睛更大 + 张大嘴（带舌头），嘴整体下沉让开鼻子
+ * sick   : ∪ 闭眼弧（虚弱）+ 小圆嘴
+ * hungry : 眼睛更大 + 张大嘴（带小舌头），嘴整体下沉让开鼻子
  */
 const ExprStyle kStyles[PetFaceView::kExprCount] = {
-    /*      eye_w eye_h eye_y | arc_w thick top | hl | mode m_w thick m_bottom */
-    /* neutral */ {50, 58, 117, 0, 0, 0, 100, 0, 0, 0, 214},
-    /* happy   */ {0, 0, 117, 44, 9, 122, 0, 1, 52, 6, 214},
-    /* sad     */ {46, 50, 122, 0, 0, 0, 70, 1, 44, 5, 224},   /* 弧顶 = 224-22 = 202 */
-    /* sick    */ {50, 22, 152, 0, 0, 0, 0, 2, 20, 3, 220},    /* 圆顶 = 220-20 = 200 */
-    /* hungry  */ {56, 64, 112, 0, 0, 0, 110, 3, 36, 0, 228},  /* 张嘴顶 = 228-27 = 201 */
+    /*      eye_w eye_h eye_y | arc_w thick top down | hl | mode m_w thick m_bottom */
+    /* neutral */ {50, 58, 117, 0, 0, 0, 0, 100, 0, 0, 0, 214},
+    /* happy   */ {0, 0, 117, 40, 9, 132, 0, 0, 1, 40, 6, 214},
+    /* sad     */ {46, 50, 122, 0, 0, 0, 0, 70, 1, 40, 5, 222},   /* 弧顶 = 222-20 = 202 */
+    /* sick    */ {0, 0, 117, 44, 8, 118, 1, 0, 2, 22, 3, 224},   /* 圆顶 = 224-22 = 202 */
+    /* hungry  */ {56, 64, 112, 0, 0, 0, 0, 110, 3, 36, 0, 227},  /* 张嘴顶 = 227-27 = 200 */
 };
 
 lv_obj_t* MakeObj(lv_obj_t* parent, bool filled) {
@@ -243,9 +244,10 @@ void PetFaceView::Apply() {
     for (int i = 0; i < 2; i++) {
         int cx = (i == 0) ? kEyeCxL : kEyeCxR;
         if (s.arc_w > 0) {
-            /* 弧线眼：只显示 top 边 → ∩ 形笑眼 */
+            /* 弧线眼：只留一条边 → ∩（笑眼）或 ∪（闭眼） */
             Show(eye_[i], false);
-            MakeArc(eye_arc_[i], s.arc_w, s.arc_w, s.arc_thick, LV_BORDER_SIDE_TOP, kInk);
+            MakeArc(eye_arc_[i], s.arc_w, s.arc_w, s.arc_thick,
+                    s.arc_down ? LV_BORDER_SIDE_BOTTOM : LV_BORDER_SIDE_TOP, kInk);
             lv_obj_set_pos(eye_arc_[i], cx - s.arc_w / 2, s.arc_top);
             Show(eye_arc_[i], true);
         } else {
@@ -325,10 +327,10 @@ void PetFaceView::Apply() {
             lv_obj_set_size(mouth_open_, w, h);
             lv_obj_set_pos(mouth_open_, kMouthCenterX - w / 2, s.mouth_bottom - h);
             Show(mouth_open_, true);
-            const int tw = w * 55 / 100;
+            const int tw = w * 35 / 100;
             const int th = tw / 2;
             lv_obj_set_size(tongue_, tw, th);
-            lv_obj_set_pos(tongue_, kMouthCenterX - tw / 2, s.mouth_bottom - th - 2);
+            lv_obj_set_pos(tongue_, kMouthCenterX - tw / 2, s.mouth_bottom - th - 3);
             Show(tongue_, true);
             break;
         }
