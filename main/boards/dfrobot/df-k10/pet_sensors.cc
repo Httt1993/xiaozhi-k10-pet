@@ -174,9 +174,11 @@ void PetSensors::InitLight() {
     uint8_t rate[2] = {0x85, 0x1B};
     Write(PET_LTR303_ADDR, rate, 2);
 
-    // 0x80 ALS_CONTR：bit0 = active，bit[4:3] 增益 = 10 → 4x
-    // 相对原来的 1x/100ms，灵敏度提高 16 倍；饱和点仍在 6 万 lux 以上，室内不会过曝
-    uint8_t contr[2] = {0x80, 0x11};
+    // 0x80 ALS_CONTR：bit0 = active，bit[4:2] 是**三位**增益编码
+    //   000=1x 001=2x 010=4x 011=8x 110=48x 111=96x（100/101 非法）
+    // ★ 踩过的坑：一开始按「两位、bit[4:3]」写成 0x11（=1001b），芯片把非法的
+    //   100 丢掉、只留 active 位，回读仍是 0x01，增益等于没设。4x 的正确编码是 010 → 0x09。
+    uint8_t contr[2] = {0x80, 0x09};
     if (Write(PET_LTR303_ADDR, contr, 2) != ESP_OK) {
         ESP_LOGW(TAG, "LTR303 启动失败");
         return;
@@ -193,9 +195,9 @@ void PetSensors::InitLight() {
     ReadReg(PET_LTR303_ADDR, 0x80, &rb_contr, 1);
     ReadReg(PET_LTR303_ADDR, 0x85, &rb_rate, 1);
 
-    // ALS_CONTR bit[4:3] = 增益档：00=1x 01=2x 10=4x 11=8x
-    static const float kGainTable[4] = {1.0f, 2.0f, 4.0f, 8.0f};
-    float gain = kGainTable[(rb_contr >> 3) & 0x03];
+    // ALS_CONTR bit[4:2] = 三位增益编码：000=1x 001=2x 010=4x 011=8x 110=48x 111=96x
+    static const float kGainTable[8] = {1.0f, 2.0f, 4.0f, 8.0f, 1.0f, 1.0f, 48.0f, 96.0f};
+    float gain = kGainTable[(rb_contr >> 2) & 0x07];
     // ALS_MEAS_RATE bit[5:3] = 积分时间档（单位 ms）
     static const int kIntTable[8] = {100, 50, 200, 400, 150, 250, 300, 350};
     int int_ms = kIntTable[(rb_rate >> 3) & 0x07];
