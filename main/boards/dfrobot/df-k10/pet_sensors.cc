@@ -144,24 +144,52 @@ void PetSensors::InitLight() {
         return;
     }
 
+    // ★ LTR-303 寄存器地址全在 0x80~0x8F 区间，不存在 0x00/0x01/0x04 这类低地址。
+    // 早期版本误用了低地址，I2C 写入照样 ACK，所以"传感器存在"判断是假阳性、
+    // PART_ID 恒读 0x00、光照数据全是垃圾。以 0x86 PART_ID 为准。
     uint8_t part = 0;
-    if (ReadReg(PET_LTR303_ADDR, 0x0A, &part, 1) == ESP_OK) {
-        ESP_LOGI(TAG, "LTR303 PART_ID=0x%02X", part);
+    uint8_t manu = 0;
+    if (ReadReg(PET_LTR303_ADDR, 0x86, &part, 1) != ESP_OK) {
+        ESP_LOGW(TAG, "LTR303 PART_ID 读失败");
+    }
+    if (ReadReg(PET_LTR303_ADDR, 0x87, &manu, 1) != ESP_OK) {
+        ESP_LOGW(TAG, "LTR303 MANUFAC_ID 读失败");
+    }
+    // LTR-303ALS-01: PART_ID=0xA3 MANUFAC_ID=0x05
+    // LTR-329ALS-01: PART_ID=0x0A MANUFAC_ID=0x05
+    // LTR-553ALS-01: PART_ID=0x50 MANUFAC_ID=0x05
+    ESP_LOGI(TAG, "LTR303 PART_ID=0x%02X MANUFAC_ID=0x%02X (expect 0xA3/0x0A/0x50 + 0x05)",
+             part, manu);
+    if (manu != 0x05) {
+        ESP_LOGW(TAG, "LTR303 厂商 ID 不是 0x05，光照读数可能不可信（继续尝试）");
     }
 
-    uint8_t reset_cmd[2] = {0x00, 0x02};  // 软复位
+    uint8_t reset_cmd[2] = {0x80, 0x02};  // 0x80 ALS_CONTR: bit1 = 软复位
     Write(PET_LTR303_ADDR, reset_cmd, 2);
     pet_delay_ms(20);
 
-    uint8_t rate[2] = {0x01, 0x02};  // 100ms 测量周期
+    uint8_t rate[2] = {0x85, 0x03};  // 0x85 ALS_MEAS_RATE: 100ms 积分 + 500ms 周期
     Write(PET_LTR303_ADDR, rate, 2);
 
-    uint8_t contr[2] = {0x00, 0x01};  // active + gain 1x
+    uint8_t contr[2] = {0x80, 0x01};  // 0x80 ALS_CONTR: bit0 = active，gain 1x
     if (Write(PET_LTR303_ADDR, contr, 2) != ESP_OK) {
         ESP_LOGW(TAG, "LTR303 启动失败");
         return;
     }
-    pet_delay_ms(150);  // 等第一次转换完成
+    pet_delay_ms(300);  // 100ms 积分时间，留足两次转换
+
+    // 光靠"写入成功"不算数，必须真读到非零数据才算可用
+    uint8_t probe[4] = {0};
+    uint16_t ch0_first = 0;
+    if (ReadReg(PET_LTR303_ADDR, 0x88, probe, sizeof(probe)) == ESP_OK) {
+        ch0_first = static_cast<uint16_t>((probe[3] << 8) | probe[2]);
+    }
+    if (ch0_first == 0xFFFF) {
+        ESP_LOGW(TAG, "LTR303 数据全 1（0xFFFF），光照不可用");
+        return;
+    }
+    ESP_LOGI(TAG, "LTR303 首次采样 CH0=%u CH1=%u",
+             ch0_first, static_cast<unsigned>((probe[1] << 8) | probe[0]));
     light_ok_ = true;
 }
 
@@ -220,7 +248,8 @@ bool PetSensors::ReadLight(uint16_t& ch0, uint16_t& ch1, int& bright_pct) {
         return false;
     }
     uint8_t b[4] = {0};
-    if (ReadReg(PET_LTR303_ADDR, 0x04, b, sizeof(b)) != ESP_OK) {
+    // 0x88 = ALS_DATA_CH1_0：顺序为 CH1_L CH1_H CH0_L CH0_H
+    if (ReadReg(PET_LTR303_ADDR, 0x88, b, sizeof(b)) != ESP_OK) {
         return false;
     }
     ch1 = static_cast<uint16_t>((b[1] << 8) | b[0]);  // 红外
