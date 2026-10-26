@@ -68,6 +68,32 @@ std::string ColorNameList() {
     return out;
 }
 
+/*
+ * 把照度翻译成人话。
+ *
+ * 教训：以前只给模型一个 bright_pct（log10(ch0)*20），实测室内 CH0=148 会算出 43%，
+ * 模型拿到这种没头没脑的百分数，嘴上就会说「黑黑的」。给词它就说得准。
+ * 分档阈值按实测：普通室内灯约 100~200 lux，夜里关灯约 0~3 lux。
+ */
+const char* LightLevelText(float lux) {
+    if (lux < 2.0f) {
+        return "漆黑";
+    }
+    if (lux < 15.0f) {
+        return "很暗";
+    }
+    if (lux < 60.0f) {
+        return "偏暗";
+    }
+    if (lux < 300.0f) {
+        return "室内正常";
+    }
+    if (lux < 1200.0f) {
+        return "明亮";
+    }
+    return "很强";
+}
+
 }  // namespace
 
 PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2c_bus)
@@ -229,20 +255,23 @@ void PetTools::RegisterSensorTools() {
     mcp_server.AddTool(
         "self.pet.get_env",
         "读取设备周围环境：温度、湿度、房间亮度、设备是否被拿起/晃过。"
-        "适合在孩子说『你摸摸我』『你冷不冷』『房间里黑不黑』时调用。",
+        "适合在孩子说『你摸摸我』『你冷不冷』『房间里黑不黑』时调用。"
+        "返回的 light_level 已经是「漆黑/很暗/偏暗/室内正常/明亮/很强」这样的结论，"
+        "请直接采信它来描述房间亮度，不要自己拿 light_lux 或别的字段做二次推断；"
+        "只有 light_level 说「漆黑」「很暗」时，才可以形容房间很暗。",
         PropertyList(),
         [this](const PropertyList&) -> ToolResult {
             float temp_c = 0.0f;
             float humidity = 0.0f;
             uint16_t ch0 = 0;
             uint16_t ch1 = 0;
-            int bright_pct = 0;
+            float lux = 0.0f;
             int16_t x = 0;
             int16_t y = 0;
             int16_t z = 0;
 
             bool ok_th = sensors_.ReadTempHumid(temp_c, humidity);
-            bool ok_light = sensors_.ReadLight(ch0, ch1, bright_pct);
+            bool ok_light = sensors_.ReadLight(ch0, ch1, lux);
             bool ok_accel = sensors_.ReadAccel(x, y, z);
 
             bool moved = false;
@@ -271,8 +300,10 @@ void PetTools::RegisterSensorTools() {
                 out += buf;
             }
             if (ok_light) {
-                snprintf(buf, sizeof(buf), "\"light_raw\":%u,\"bright_pct\":%d,",
-                         static_cast<unsigned>(ch0), bright_pct);
+                snprintf(buf, sizeof(buf),
+                         "\"light_level\":\"%s\",\"light_lux\":%.0f,\"light_raw\":%u,",
+                         LightLevelText(lux), static_cast<double>(lux),
+                         static_cast<unsigned>(ch0));
                 out += buf;
             }
             if (ok_accel) {

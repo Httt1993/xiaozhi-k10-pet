@@ -35,8 +35,8 @@ public:
     /* 温度 ℃ / 湿度 %RH */
     bool ReadTempHumid(float& temp_c, float& humidity);
 
-    /* 环境光：可见光通道计数 ch0、红外通道 ch1，以及 0-100 亮度分档（非标定 lux） */
-    bool ReadLight(uint16_t& ch0, uint16_t& ch1, int& bright_pct);
+    /* 环境光：可见光通道计数 ch0、红外通道 ch1，以及估算照度 lux（非标定值，用于分档） */
+    bool ReadLight(uint16_t& ch0, uint16_t& ch1, float& lux);
 
     /* 加速度，单位毫克（mg），重力约 1000mg */
     bool ReadAccel(int16_t& x_mg, int16_t& y_mg, int16_t& z_mg);
@@ -74,8 +74,8 @@ public:
     bool HasLight() const { return false; }
     bool HasAccel() const { return false; }
     bool ReadTempHumid(float&, float&) { return false; }
-    bool ReadLight(uint16_t&, uint16_t&, int& pct) {
-        pct = 0;
+    bool ReadLight(uint16_t&, uint16_t&, float& lux) {
+        lux = 0.0f;
         return false;
     }
     bool ReadAccel(int16_t&, int16_t&, int16_t&) { return false; }

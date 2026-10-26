@@ -11,6 +11,14 @@
 
 #if PET_ENABLE_SENSORS
 
+/*
+ * LTR-303 当前配置：增益 4×、积分 400ms。
+ * 相对「1× / 100ms」的基准灵敏度是 4 × 4 = 16 倍，
+ * 所以把原始计数除以 16 就近似回到「1 计数 ≈ 1 lux」的基准，
+ * 这也是下面 lux 换算的唯一依据。改初始化里的增益/积分时间，必须同步改这里。
+ */
+static constexpr float kLightScale = 16.0f;
+
 static inline void pet_delay_ms(int ms) {
     vTaskDelay(pdMS_TO_TICKS(ms));
 }
@@ -168,15 +176,20 @@ void PetSensors::InitLight() {
     Write(PET_LTR303_ADDR, reset_cmd, 2);
     pet_delay_ms(20);
 
-    uint8_t rate[2] = {0x85, 0x03};  // 0x85 ALS_MEAS_RATE: 100ms 积分 + 500ms 周期
+    // 0x85 ALS_MEAS_RATE：
+    //   bit[5:3] 积分时间 = 011 → 400ms（分辨率最高，弱光下计数更大）
+    //   bit[2:0] 测量周期 = 011 → 500ms
+    uint8_t rate[2] = {0x85, 0x1B};
     Write(PET_LTR303_ADDR, rate, 2);
 
-    uint8_t contr[2] = {0x80, 0x01};  // 0x80 ALS_CONTR: bit0 = active，gain 1x
+    // 0x80 ALS_CONTR：bit0 = active，bit[4:3] 增益 = 10 → 4x
+    // 相对原来的 1x/100ms，灵敏度提高 16 倍；饱和点仍在 6 万 lux 以上，室内不会过曝
+    uint8_t contr[2] = {0x80, 0x11};
     if (Write(PET_LTR303_ADDR, contr, 2) != ESP_OK) {
         ESP_LOGW(TAG, "LTR303 启动失败");
         return;
     }
-    pet_delay_ms(300);  // 100ms 积分时间，留足两次转换
+    pet_delay_ms(600);  // 400ms 积分时间，留足一次完整转换（周期 500ms）
 
     // 光靠"写入成功"不算数，必须真读到非零数据才算可用
     uint8_t probe[4] = {0};
@@ -188,8 +201,9 @@ void PetSensors::InitLight() {
         ESP_LOGW(TAG, "LTR303 数据全 1（0xFFFF），光照不可用");
         return;
     }
-    ESP_LOGI(TAG, "LTR303 首次采样 CH0=%u CH1=%u",
-             ch0_first, static_cast<unsigned>((probe[1] << 8) | probe[0]));
+    ESP_LOGI(TAG, "LTR303 首次采样 CH0=%u CH1=%u → 约 %.1f lux（增益4x/积分400ms）",
+             ch0_first, static_cast<unsigned>((probe[1] << 8) | probe[0]),
+             static_cast<double>(ch0_first / kLightScale));
     light_ok_ = true;
 }
 
@@ -243,7 +257,7 @@ bool PetSensors::ReadTempHumid(float& temp_c, float& humidity) {
     return true;
 }
 
-bool PetSensors::ReadLight(uint16_t& ch0, uint16_t& ch1, int& bright_pct) {
+bool PetSensors::ReadLight(uint16_t& ch0, uint16_t& ch1, float& lux) {
     if (!light_ok_) {
         return false;
     }
@@ -253,21 +267,17 @@ bool PetSensors::ReadLight(uint16_t& ch0, uint16_t& ch1, int& bright_pct) {
         return false;
     }
     ch1 = static_cast<uint16_t>((b[1] << 8) | b[0]);  // 红外
-    ch0 = static_cast<uint16_t>((b[3] << 8) | b[2]);  // 可见光
+    ch0 = static_cast<uint16_t>((b[3] << 8) | b[2]);  // 可见光 + 红外
 
-    // 只是「房间里多亮」的粗略分档，不是标定过的 lux
-    int pct = 0;
-    if (ch0 >= 5) {
-        float l = log10f(static_cast<float>(ch0));
-        pct = static_cast<int>(l * 20.0f);
+    /*
+     * CH0 本身已经包含红外，但 LTR-303 的 CH0 对可见光的响应远高于 CH1，
+     * 直接用 CH0 归一化就足够判断「房间亮不亮」。刻意不减 CH1：
+     * 白炽灯/暖光下 CH1 占比很高，相减会把读数压到 0，反而误判成「黑的」。
+     */
+    lux = static_cast<float>(ch0) / kLightScale;
+    if (lux < 0.0f) {
+        lux = 0.0f;
     }
-    if (pct < 0) {
-        pct = 0;
-    }
-    if (pct > 100) {
-        pct = 100;
-    }
-    bright_pct = pct;
     return true;
 }
 
