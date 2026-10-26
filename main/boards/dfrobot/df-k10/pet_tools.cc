@@ -6,6 +6,7 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <cJSON.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -100,14 +101,16 @@ const char* LightLevelText(float lux) {
 PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2c_bus)
     : strip_(strip), display_(display), i2c_bus_(i2c_bus), sensors_(i2c_bus) {
     sensors_.Init();
+    cloud_.Init();
 
     RegisterMoodTools();
     RegisterFaceTools();
     RegisterSensorTools();
+    RegisterCloudTools();
 
-    ESP_LOGI(TAG, "pet tools registered (sensors: th=%d light=%d accel=%d)",
+    ESP_LOGI(TAG, "pet tools registered (sensors: th=%d light=%d accel=%d, cloud=%s)",
              sensors_.HasTempHumid() ? 1 : 0, sensors_.HasLight() ? 1 : 0,
-             sensors_.HasAccel() ? 1 : 0);
+             sensors_.HasAccel() ? 1 : 0, cloud_.cloud_enabled() ? "on" : "local");
 }
 
 void PetTools::RegisterMoodTools() {
@@ -341,18 +344,26 @@ void PetTools::RegisterSensorTools() {
 
     mcp_server.AddTool(
         "self.pet.get_status",
-        "读取宠物当前的表情、灯色和可用传感器，用于自我检查。",
+        "读取宠物的完整状态：饿不饿、有没有力气、心情好不好、有没有生病、有多少游戏币、几级，"
+        "以及屏幕表情和灯色。孩子问『你饿不饿』『你几级了』『你有多少钱』『你哪里不舒服』时调用。"
+        "返回里的 say 是宠物此刻的心声，可以顺着它的话聊。",
         PropertyList(),
         [this](const PropertyList&) -> ToolResult {
-            char buf[192];
-            snprintf(buf, sizeof(buf),
-                     "{\"face\":\"%s\",\"mood\":\"%s\",\"level\":%d,\"sensors\":{\"temp_humid\":%s,"
-                     "\"light\":%s,\"accel\":%s}}",
-                     face_.c_str(), mood_name_.c_str(), level_,
-                     sensors_.HasTempHumid() ? "true" : "false",
-                     sensors_.HasLight() ? "true" : "false",
-                     sensors_.HasAccel() ? "true" : "false");
-            return std::string(buf);
+            /* 30 秒内问过就不再打云端：一句话里模型可能连着问好几次状态，
+             * 每次都走 TLS 握手会把响应拖到 3 秒以上。 */
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            bool need_sync = (last_status_ms_ == 0) || (now_ms - last_status_ms_ > 30000);
+
+            if (need_sync) {
+                PetActionResult r = cloud_.Act("sync", "");
+                last_status_ms_ = now_ms;
+                if (r.from_cloud) {
+                    ReactToEvents(r);
+                }
+            }
+
+            PetStatus st = cloud_.GetStatus();
+            return StatusJson(st, cloud_.fail_streak() > 0 ? "local" : "cloud");
         });
 
     mcp_server.AddTool(
@@ -370,6 +381,238 @@ void PetTools::RegisterSensorTools() {
                 snprintf(buf, sizeof(buf), "0x%02X ", found[i]);
                 out += buf;
             }
+            return out;
+        });
+}
+
+// ==================================================================== 养成动作
+// 这里是「宠物真正活着」的部分：饿、累、生病、金币、任务都不是写死的动画，
+// 而是由云端按真实时间推演出来的状态，设备只负责呈现。
+
+std::string PetTools::StatusJson(const PetStatus& st, const char* mode) {
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "{\"hunger\":%d,\"energy\":%d,\"mood\":%d,\"sick\":%s,\"coins\":%d,\"level\":%d,"
+             "\"exp\":%d,\"face\":\"%s\",\"light\":\"%s\",\"mode\":\"%s\",\"say\":\"%s\"}",
+             st.hunger, st.energy, st.mood, st.sick ? "true" : "false", st.coins, st.level, st.exp,
+             face_.c_str(), mood_name_.c_str(), mode, st.mood_word.c_str());
+    return std::string(buf);
+}
+
+/*
+ * 状态 → 灯 + 脸 的自动联动。
+ *
+ * 只在「最高优先级事件发生变化」时动手。原因：孩子可能刚说过「把灯设成紫色」，
+ * 如果每轮动作都按状态覆盖一遍，用户的手动设置就永远留不住。
+ * 事件变了才代表宠物真的换了状态（比如刚饿到不行、刚生病、刚治好），这时候变灯才合理。
+ */
+void PetTools::ReactToEvents(const PetActionResult& result) {
+#if PET_CLOUD_AUTO_REACT
+    struct Reaction {
+        const char* event;
+        const char* color;
+        int level;
+        const char* face;
+    };
+    /* 顺序无关紧要：events 已经是按严重程度排好序的，取第一个即可 */
+    static const Reaction kReactions[] = {
+        {"sick", "red", 6, "sick"},
+        {"starving", "warm_orange", 8, "hungry"},
+        {"hungry", "warm_orange", 5, "hungry"},
+        {"tired", "blue", 4, "sad"},
+        {"sad", "blue", 4, "sad"},
+        {"bored", "sky_blue", 4, "neutral"},
+        {"great", "green", 5, "happy"},
+    };
+
+    if (result.events.empty()) {
+        /* 恢复正常：清掉记录，下次再出状况还能触发 */
+        last_react_event_.clear();
+        return;
+    }
+
+    const std::string& top = result.events.front();
+    if (top == last_react_event_) {
+        return; /* 状态没本质变化，不打扰用户手动设的灯 */
+    }
+    last_react_event_ = top;
+
+    for (const auto& r : kReactions) {
+        if (top != r.event) {
+            continue;
+        }
+        const PetColorEntry* entry = FindColor(r.color);
+        if (entry != nullptr && strip_ != nullptr) {
+            level_ = r.level;
+            mood_name_ = entry->name;
+            strip_->SetMood(entry->red, entry->green, entry->blue, r.level, true);
+        }
+        if (display_ != nullptr && FaceExists(r.face)) {
+            if (display_->SetPetFace(r.face)) {
+                face_ = r.face;
+            }
+        }
+        ESP_LOGI(TAG, "PET_PATCH: auto react event=%s -> light=%s level=%d face=%s", r.event,
+                 r.color, r.level, r.face);
+        return;
+    }
+#else
+    (void)result;
+#endif
+}
+
+void PetTools::RegisterCloudTools() {
+    auto& mcp_server = McpServer::GetInstance();
+
+    /*
+     * 统一动作入口。刻意做成「一个工具 + action 枚举」，而不是给每个动作单独一个工具：
+     * 工具列表越长，模型选错的概率越高；而这十几个动作对孩子来说本来就是「对它做点什么」
+     * 这一件事的不同说法。
+     */
+    mcp_server.AddTool(
+        "self.pet.action",
+        "对宠物做一件事。孩子说「喂它吃苹果」「陪它玩」「让它睡觉」「给我讲故事」「摸摸它」时用本工具。\n"
+        "action 取值：\n"
+        "  feed     —— 喂食，必须同时给 food（小饼干 / 苹果 / 牛奶 / 胡萝卜 / 热汤面 / 小蛋糕）\n"
+        "  medicine —— 喂药，必须同时给 medicine（退烧药 / 感冒冲剂 / 维生素）\n"
+        "  play     —— 陪它玩（花 3 币，心情大涨）\n"
+        "  heal     —— 带它看病（花 10 币，治好病）\n"
+        "  sleep    —— 让它睡觉（回精力）\n"
+        "  story    —— 讲故事，可选给 topic（恐龙 / 太空 / 小兔子…）\n"
+        "  song     —— 唱歌\n"
+        "  teach    —— 学新东西，可选给 what\n"
+        "  pet      —— 摸摸头（免费，只加一点点心情）\n"
+        "  chat     —— 只是想聊两句、看看它状态\n"
+        "返回 ok=false 时，code 说明原因（FULL 吃饱了 / NO_COIN 币不够 / NOT_SICK 没生病 /\n"
+        "WRONG_MED 吃错药 / DAILY_CAP 今天次数用完），把 say 顺其自然地告诉孩子，不要念 code。\n"
+        "返回的 say 是宠物自己的话，用它来回答孩子最自然。",
+        PropertyList({
+            Property("action", kPropertyTypeString, std::string("chat")),
+            Property("food", kPropertyTypeString, std::string("")),
+            Property("medicine", kPropertyTypeString, std::string("")),
+            Property("topic", kPropertyTypeString, std::string("")),
+            Property("what", kPropertyTypeString, std::string("")),
+        }),
+        [this](const PropertyList& properties) -> ToolResult {
+            std::string action = properties["action"].value<std::string>();
+            std::string food = properties["food"].value<std::string>();
+            std::string medicine = properties["medicine"].value<std::string>();
+            std::string topic = properties["topic"].value<std::string>();
+            std::string what = properties["what"].value<std::string>();
+
+            if (action.empty()) {
+                action = "chat";
+            }
+
+            cJSON* args = cJSON_CreateObject();
+            if (!food.empty()) {
+                cJSON_AddStringToObject(args, "food", food.c_str());
+            }
+            if (!medicine.empty()) {
+                cJSON_AddStringToObject(args, "medicine", medicine.c_str());
+            }
+            if (!topic.empty()) {
+                cJSON_AddStringToObject(args, "topic", topic.c_str());
+            }
+            if (!what.empty()) {
+                cJSON_AddStringToObject(args, "what", what.c_str());
+            }
+            char* text = cJSON_PrintUnformatted(args);
+            std::string args_json = text != nullptr ? text : "{}";
+            if (text != nullptr) {
+                cJSON_free(text);
+            }
+            cJSON_Delete(args);
+
+            PetActionResult r = cloud_.Act(action, args_json);
+            if (r.from_cloud) {
+                ReactToEvents(r);
+                /* 动作之后状态变了，缓存标记作废，下次问状态会重新同步 */
+                last_status_ms_ = esp_timer_get_time() / 1000;
+            }
+
+            PetStatus st = cloud_.GetStatus();
+            std::string out;
+            out.reserve(320);
+            out += "{\"ok\":";
+            out += r.ok ? "true" : "false";
+            out += ",\"code\":\"";
+            out += r.code;
+            out += "\",\"say\":\"";
+            out += r.say;
+            out += "\",\"mode\":\"";
+            out += r.from_cloud ? "cloud" : "local";
+            out += "\",\"hunger\":";
+            out += std::to_string(st.hunger);
+            out += ",\"energy\":";
+            out += std::to_string(st.energy);
+            out += ",\"mood\":";
+            out += std::to_string(st.mood);
+            out += ",\"sick\":";
+            out += st.sick ? "true" : "false";
+            out += ",\"coins\":";
+            out += std::to_string(st.coins);
+            out += "}";
+            return out;
+        });
+
+    mcp_server.AddTool(
+        "self.pet.task",
+        "孩子的任务清单。家长布置任务、孩子报备完成、家长确认发币都走这里。\n"
+        "op 取值：\n"
+        "  list    —— 列出当前任务（孩子问「我今天要做什么」时用）\n"
+        "  submit  —— 孩子说「我做完了整理房间」，要给 title\n"
+        "  publish —— 家长说「给她加个任务：整理房间，奖励 10 个金币」，要给 title 和 reward\n"
+        "  approve —— 家长确认孩子报备的任务，给 title\n"
+        "  reject  —— 家长说这个任务没做好，打回去，给 title\n"
+        "报备后默认要家长确认才发币，这是刻意的：让孩子学会「做完还要被检查」。",
+        PropertyList({
+            Property("op", kPropertyTypeString, std::string("list")),
+            Property("title", kPropertyTypeString, std::string("")),
+            Property("reward", kPropertyTypeInteger, 10, 1, 999),
+        }),
+        [this](const PropertyList& properties) -> ToolResult {
+            std::string op = properties["op"].value<std::string>();
+            std::string title = properties["title"].value<std::string>();
+            int reward = properties["reward"].value<int>();
+
+            if (op.empty() || op == "list") {
+                return std::string("{\"ok\":true,\"mode\":\"") +
+                       (cloud_.fail_streak() > 0 ? "local" : "cloud") + "\",\"tasks\":\"" +
+                       cloud_.TaskListText(false) + "\"}";
+            }
+
+            if (title.empty()) {
+                return std::unexpected("要告诉我任务名字，孩子才知道做哪一件。");
+            }
+
+            cJSON* args = cJSON_CreateObject();
+            cJSON_AddStringToObject(args, "title", title.c_str());
+            if (op == "publish") {
+                cJSON_AddNumberToObject(args, "reward", reward);
+            }
+            char* text = cJSON_PrintUnformatted(args);
+            std::string args_json = text != nullptr ? text : "{}";
+            if (text != nullptr) {
+                cJSON_free(text);
+            }
+            cJSON_Delete(args);
+
+            PetActionResult r = cloud_.Act("task_" + op, args_json);
+
+            std::string out;
+            out.reserve(256);
+            out += "{\"ok\":";
+            out += r.ok ? "true" : "false";
+            out += ",\"code\":\"";
+            out += r.code;
+            out += "\",\"say\":\"";
+            out += r.say;
+            out += "\",\"mode\":\"";
+            out += r.from_cloud ? "cloud" : "local";
+            out += "\",\"coins\":";
+            out += std::to_string(cloud_.GetStatus().coins);
+            out += "}";
             return out;
         });
 }

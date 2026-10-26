@@ -1,0 +1,11 @@
+{
+  "name": "pet-cloud-scf",
+  "version": "1.0.0",
+  "description": "小智 K10 宠物云端演化引擎 · 腾讯云 SCF",
+  "main": "index.js",
+  "private": true,
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {}
+}
