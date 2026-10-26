@@ -11,6 +11,8 @@
 #include "led/circular_strip.h"
 #include "pet_strip.h"    // PET_PATCH_MARK
 #include "pet_tools.h"
+#include "pet_config.h"
+#include "sd_probe.h"
 #include "assets/lang_config.h"
 
 #include <esp_log.h>
@@ -270,6 +272,7 @@ private:
 
 public:
     Df_K10Board() {
+        PetSdCardProbe();   // PET_SD_PROBE=1 时遍历候选引脚找 TF 卡，必须在 SPI 屏幕之前
         InitializeI2c();
         InitializeIoExpander();
         InitializeSpi();
