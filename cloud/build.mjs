@@ -24,7 +24,7 @@ const OUT_DIR = path.join(__dirname, 'dist');
 const OUT_ZIP = path.join(OUT_DIR, 'pet-cloud-scf.zip');
 
 // 要打进包的文件（顺序固定，便于比对）
-const FILES = ['index.js', 'pet-core.js', 'package.json'];
+const FILES = ['index.js', 'pet-core.js', 'store.js', 'parent.js', 'package.json'];
 
 let checkPass = 0;
 let checkFail = 0;
@@ -127,8 +127,82 @@ try {
 try {
   const r = await handler({ httpMethod: 'GET', headers: { host: 'scf.example.com' }, path: '/' }, {});
   check(r.statusCode === 200 && String(r.body).includes('宠物云端引擎'), 'GET 返回中文自检页');
+  check(String(r.body).includes('page=parent'), '自检页里有家长看板入口');
 } catch (err) {
   check(false, 'GET 自检页', err.message);
+}
+
+// 家长看板：页面壳 + 空快照 + 排队 → 设备上报时送达
+try {
+  const r = await handler(
+    { httpMethod: 'GET', headers: { host: 'scf.example.com' }, path: '/', queryString: { page: 'parent' } },
+    {}
+  );
+  check(
+    r.statusCode === 200 && String(r.body).includes('家长看板') && String(r.body).includes('<style>'),
+    'GET ?page=parent 返回看板页'
+  );
+} catch (err) {
+  check(false, 'GET 家长看板', err.message);
+}
+
+try {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  /* 云函数读的是 process.env，测试就照着改，别造一个假的 env 对象 */
+  const storeFile = path.join(OUT_DIR, '.smoke-store.json');
+  process.env.PET_STORE_FILE = storeFile;
+  const env = {};
+
+  const apiGet = (q) => ({
+    httpMethod: 'GET',
+    headers: { host: 'scf.example.com' },
+    path: '/',
+    queryString: Object.assign({ page: 'parent', api: '1' }, q || {}),
+  });
+  const apiPost = (body) => ({
+    httpMethod: 'POST',
+    headers: { host: 'scf.example.com' },
+    path: '/',
+    queryString: { page: 'parent', api: '1' },
+    body: JSON.stringify(body),
+  });
+
+  /* 先让设备上报一次，快照才有东西 */
+  const s = JSON.parse((await handler(postEvent({ action: 'sync', state: null }), env)).body).state;
+  await handler(postEvent({ action: 'sync', state: s }), env);
+
+  const snap = JSON.parse((await handler(apiGet(), env)).body);
+  check(snap.ok && snap.state_present && snap.status && snap.status.coins >= 0, '看板能读到设备快照');
+  check(snap.backend === 'file', '快照后端识别为 file');
+
+  /* 家长点「喂饭」→ 排队 */
+  const q = JSON.parse((await handler(apiPost({ cmd: 'feed', args: { food: '苹果' } }), env)).body);
+  check(q.ok && q.queued === 1, '看板点喂饭进入队列');
+
+  /* 设备再上报 → 队列被消费，饱食度真的涨了 */
+  await handler(postEvent({ action: 'sync', state: s }), env);
+  const after = JSON.parse((await handler(apiGet(), env)).body);
+  check(after.pending.length === 0, '设备上报后队列被清空（指令已送达）');
+  check(
+    after.status && after.status.hunger === 80 && after.status.coins === 18,
+    '排队指令真的生效：饱食 60→80、金币 20→18',
+    after.status ? 'hunger=' + after.status.hunger + ' coins=' + after.status.coins : 'no status'
+  );
+  check(
+    after.events.some((e) => String(e.text).indexOf('已送达') >= 0),
+    '送达结果写进了家长事件流'
+  );
+
+  /* 非法指令要拒绝，避免看板被当成提币口 */
+  const bad = await handler(apiPost({ cmd: 'coins', args: { delta: 999 } }), env);
+  check(bad.statusCode === 400, '看板拒绝 coins 这类敏感动作');
+
+  try {
+    fs.unlinkSync(storeFile);
+  } catch (_) {}
+  delete process.env.PET_STORE_FILE;
+} catch (err) {
+  check(false, '家长看板链路', err.message + '\n' + err.stack);
 }
 
 // 定时触发不能崩

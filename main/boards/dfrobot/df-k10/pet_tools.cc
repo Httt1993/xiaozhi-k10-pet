@@ -111,6 +111,10 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
     ESP_LOGI(TAG, "pet tools registered (sensors: th=%d light=%d accel=%d, cloud=%s)",
              sensors_.HasTempHumid() ? 1 : 0, sensors_.HasLight() ? 1 : 0,
              sensors_.HasAccel() ? 1 : 0, cloud_.cloud_enabled() ? "on" : "local");
+
+    /* 本地模式下开了也没用（cloud_enabled 会直接 return），索性按配置传，
+       这样切换云端/本地不用改两处。 */
+    cloud_.StartHeartbeat(PET_HEARTBEAT_SEC);
 }
 
 void PetTools::RegisterMoodTools() {

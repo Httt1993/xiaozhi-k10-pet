@@ -78,6 +78,21 @@ public:
     /** 任务清单的人话版，直接给模型 */
     std::string TaskListText(bool include_done = false);
 
+    /**
+     * 启动后台心跳：每 interval_sec 秒静默 sync 一次，把家长看板排队的指令取回来。
+     *
+     * 为什么要它：家长在网页上点了「喂饭」，设备不主动来问就永远不知道。
+     * 心跳就是「设备每隔一会儿来问一句：有我的事吗」。
+     *
+     * 为什么不是每 5 分钟就无脑写一次 NVS：
+     * 衰减是每 0.5 小时才动一步，5 分钟里状态大概率没变。
+     * 如果每次都落盘，一年就是十万次擦写，NVS 分区撑不住。
+     * 所以心跳走 keep_memory=true 的路径：内存态照更新，只有"值得记"的变化才落盘。
+     *
+     * interval_sec <= 0 表示不启动（PET_CLOUD_URL 为空时启动也没意义）。
+     */
+    void StartHeartbeat(int interval_sec);
+
     /** 云端最近一次成功同步的耗时（毫秒），0 = 还没成功过 */
     int last_latency_ms() const { return last_latency_ms_; }
 
@@ -90,6 +105,12 @@ private:
 
     /* ---- 网络 ---- */
     bool HttpPost(const std::string& body, std::string& out, std::string& err);
+
+    /* ---- 心跳 ---- */
+    static void HeartbeatTask(void* arg);
+    bool HeartbeatEligible();
+    /* 状态指纹：只挑"重启后不能丢"的字段。和上次一样就不写 NVS。 */
+    std::string StateFingerprint() const;
 
     /* ---- 响应处理 ---- */
     bool ApplyResponse(const char* resp, PetActionResult& out);
@@ -114,6 +135,13 @@ private:
     int last_latency_ms_ = 0;
     int fail_streak_ = 0;
     bool inited_ = false;
+
+    /* ---- 心跳 ---- */
+    void* heartbeat_task_ = nullptr;   /* TaskHandle_t，头文件不引 FreeRTOS，用 void* 挡一下 */
+    int heartbeat_sec_ = 0;
+    int heartbeat_ok_ = 0;
+    int heartbeat_fail_ = 0;
+    std::string persisted_fingerprint_;  /* 上次真正写进 NVS 的状态指纹 */
 };
 
 #endif  // _PET_CLOUD_H_

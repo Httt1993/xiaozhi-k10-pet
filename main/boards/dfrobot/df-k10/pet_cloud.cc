@@ -1,5 +1,7 @@
 #include "pet_cloud.h"
 #include "pet_config.h"
+#include "application.h"
+#include "device_state.h"
 
 #include <cJSON.h>
 #include <esp_crt_bundle.h>
@@ -7,6 +9,9 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <nvs.h>
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -281,10 +286,70 @@ void PetCloud::LoadFromNvs() {
     }
 }
 
+/**
+ * 状态指纹：只挑「重启后不能丢」的字段。
+ *
+ * 刻意不含 lastDecay —— 它每次 sync 都会变，把它算进去等于每次都写 NVS。
+ * 而 lastDecay 丢了也不要紧：云端/本地都会按「上次记录的时间」重算衰减，
+ * 结果一样，只是多算一次。
+ *
+ * 含 tasks 的 id+status：家长新布置的任务、孩子报备的状态都必须落盘，
+ * 否则一断电「今天该做什么」就没了。
+ */
+std::string PetCloud::StateFingerprint() const {
+    if (state_json_.empty()) {
+        return "";
+    }
+    cJSON* root = cJSON_Parse(state_json_.c_str());
+    if (root == nullptr) {
+        return "";
+    }
+    cJSON* p = cJSON_GetObjectItem(root, "pet");
+    if (!cJSON_IsObject(p)) {
+        cJSON_Delete(root);
+        return "";
+    }
+
+    char head[160];
+    snprintf(head, sizeof(head), "%d|%d|%d|%d|%d|%d|%lld|",
+             GetInt(p, "hunger", 0), GetInt(p, "energy", 0), GetInt(p, "mood", 0),
+             GetInt(p, "coins", 0), GetInt(p, "exp", 0), GetInt(p, "sick", 0),
+             static_cast<long long>(GetI64(p, "starvingSince", 0)));
+
+    std::string fp(head);
+    cJSON* tasks = cJSON_GetObjectItem(root, "tasks");
+    if (cJSON_IsArray(tasks)) {
+        cJSON* t = nullptr;
+        cJSON_ArrayForEach(t, tasks) {
+            cJSON* id = cJSON_GetObjectItem(t, "id");
+            cJSON* st = cJSON_GetObjectItem(t, "status");
+            if (cJSON_IsString(id)) {
+                fp += id->valuestring;
+            }
+            if (cJSON_IsString(st)) {
+                fp += ':';
+                fp += st->valuestring;
+            }
+            fp += ',';
+        }
+    }
+    cJSON_Delete(root);
+    return fp;
+}
+
 void PetCloud::PersistState() {
     if (state_json_.empty()) {
         return;
     }
+
+    /* 内容没实质变化就不落盘。
+       心跳每几分钟来一次，如果每次都写，NVS 分区一年就是十万次擦写。
+       这里挡掉的是「只有 lastDecay 变了」的那种空写。 */
+    std::string fp = StateFingerprint();
+    if (!fp.empty() && fp == persisted_fingerprint_) {
+        return;
+    }
+
     nvs_handle_t h = 0;
     esp_err_t err = nvs_open(kNvsNs, NVS_READWRITE, &h);
     if (err != ESP_OK) {
@@ -299,9 +364,80 @@ void PetCloud::PersistState() {
         /* 这里绝不能 panic：NVS 满了也只是丢一次持久化，内存态继续跑 */
         ESP_LOGW(TAG, "状态写入 NVS 失败（%s），%u B", esp_err_to_name(err),
                  static_cast<unsigned>(state_json_.size()));
+    } else {
+        persisted_fingerprint_ = fp;
     }
     nvs_close(h);
 }
+
+// ==================================================================== 心跳
+
+void PetCloud::StartHeartbeat(int interval_sec) {
+    if (interval_sec <= 0) {
+        ESP_LOGI(TAG, "心跳未启动（PET_HEARTBEAT_SEC=%d）", interval_sec);
+        return;
+    }
+    if (heartbeat_task_ != nullptr) {
+        return;
+    }
+    heartbeat_sec_ = interval_sec;
+
+    /* 栈给 8KB：这条路径要跑 esp_http_client + mbedtls 握手，
+       给少了会栈溢出重启 —— 这种重启日志里只看到 Guru Meditation，很难查。 */
+    BaseType_t ok = xTaskCreate(&PetCloud::HeartbeatTask, "pet_beat", 8192, this, 3,
+                                reinterpret_cast<TaskHandle_t*>(&heartbeat_task_));
+    if (ok != pdPASS) {
+        ESP_LOGW(TAG, "心跳任务创建失败（内存不足）：家长指令只能等孩子说话时才送达");
+        heartbeat_task_ = nullptr;
+        return;
+    }
+    ESP_LOGI(TAG, "心跳已启动：每 %d 秒静默 sync 一次，用来取回家长看板的指令", interval_sec);
+}
+
+bool PetCloud::HeartbeatEligible() {
+    /* 只在待命/聆听时同步。说话中、升级中、配网中抢网络只会让体验变差。 */
+    DeviceState state = Application::GetInstance().GetDeviceState();
+    return state == kDeviceStateIdle || state == kDeviceStateListening;
+}
+
+void PetCloud::HeartbeatTask(void* arg) {
+    auto* self = static_cast<PetCloud*>(arg);
+
+    /* 开机头 30 秒让路：激活、OTA 校时、AFE 初始化都在这个窗口里 */
+    vTaskDelay(pdMS_TO_TICKS(30000));
+
+    while (true) {
+        int wait_sec = self->heartbeat_sec_;
+        if (self->fail_streak_ >= 3) {
+            /* 断网时别按原频率硬撞，退避到最多 15 分钟 */
+            wait_sec *= 3;
+            if (wait_sec > 900) {
+                wait_sec = 900;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(wait_sec * 1000));
+
+        if (!self->cloud_enabled()) {
+            continue;
+        }
+        if (!self->HeartbeatEligible()) {
+            continue;
+        }
+
+        PetActionResult r = self->Act("sync", "{}");
+        if (r.ok) {
+            self->heartbeat_ok_++;
+            ESP_LOGI(TAG, "PET_PATCH: 心跳 sync ok %dms hunger=%d coins=%d fail=%d",
+                     self->last_latency_ms_, self->status_.hunger, self->status_.coins,
+                     self->fail_streak_);
+        } else {
+            self->heartbeat_fail_++;
+            ESP_LOGW(TAG, "PET_PATCH: 心跳 sync 失败 %s（累计 %d 次）",
+                     r.error.empty() ? "未知原因" : r.error.c_str(), self->heartbeat_fail_);
+        }
+    }
+}
+
 
 void PetCloud::PersistStatus() {
     /* 状态已经跟着 state 一起存了，这里不用单独存。保留空实现是为了以后

@@ -15,8 +15,20 @@
 'use strict';
 
 const core = require('./pet-core');
+const store = require('./store');
+const parent = require('./parent');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
+
+/**
+ * 家长看板可以触发的动作。
+ * 刻意不含 coins（自己给自己发币）、reset（误点清档）、
+ * task_submit（那是孩子该做的事，家长代做就失去意义了）。
+ */
+const DASHBOARD_ACTIONS = new Set([
+  'feed', 'play', 'medicine', 'heal', 'sleep', 'pet',
+  'task_publish', 'task_approve', 'task_reject',
+]);
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -117,6 +129,12 @@ function helpPage(endpoint) {
 这里按真实时间差算完（饿了多久、该不该生病、金币够不够），再把新状态和一句话回传。</p>
 <p class="muted">云函数本身不存数据 —— 状态存在设备的 NVS 里，所以刷新、扩容、冷启动都不会丢进度。</p>
 
+<p style="margin:18px 0 6px"><a href="?page=parent"
+  style="display:inline-block;background:#e8853a;color:#fff;text-decoration:none;
+  padding:11px 20px;border-radius:11px;font-weight:600">打开家长看板 →</a></p>
+<p class="muted">看板能看宠物此刻饿不饿、点按钮喂饭、布置和确认任务。
+点下去的指令会排队，等设备下次联网时送达。</p>
+
 <table>
   <tr><th>项目</th><th>值</th></tr>
   <tr><td>服务地址</td><td><code>${endpoint}</code></td></tr>
@@ -134,6 +152,113 @@ function helpPage(endpoint) {
 <p class="muted">可用动作：sync / feed / medicine / play / heal / sleep / story / song / teach / pet /
 chat / task_list / task_submit / task_publish / task_approve / task_reject / coins / reset / ping</p>
 </body></html>`;
+}
+
+/** 把看板指令翻成家长看得懂的一句话（存进事件流，也给提示语用） */
+function describeCmd(cmd, args) {
+  const a = args || {};
+  switch (cmd) {
+    case 'feed':
+      return '家长喂了' + (a.food ? '「' + a.food + '」' : '一顿饭');
+    case 'play':
+      return '家长陪它玩了一会儿';
+    case 'medicine':
+      return '家长给了一次药' + (a.med ? '（' + a.med + '）' : '');
+    case 'heal':
+      return '家长带它去看病了';
+    case 'sleep':
+      return '家长哄它睡觉';
+    case 'pet':
+      return '家长摸了摸它的头';
+    case 'task_publish':
+      return '家长布置了任务「' + String(a.title || '').trim() + '」，奖励 ' + (a.reward || 0) + ' 币';
+    case 'task_approve':
+      return '家长确认「' + (a._title || '任务') + '」完成，发币';
+    case 'task_reject':
+      return '家长退回了「' + (a._title || '任务') + '」，还要再检查一下';
+    default:
+      return '家长执行了 ' + cmd;
+  }
+}
+
+/**
+ * 把家长看板排队的指令，按顺序压到设备刚上报的 state 上。
+ *
+ * 为什么在「进核心前」做而不是让核心自己查队列：
+ *   pet-core 是纯函数（输入 state 出 state），不碰 IO，
+ *   所以队列这一层必须留在 index.js。这样核心还能单测。
+ *
+ * 队列先清空再执行（见 store.takePending）：
+ *   宁可丢一条，也不能重放 —— 重复发币比丢一条糟得多。
+ */
+function drainPending(env, state, ts) {
+  const queue = store.takePending(env);
+  if (!queue.length) return { state, applied: [] };
+
+  let cur = state;
+  const applied = [];
+
+  for (const cmd of queue) {
+    const action = String(cmd.action || '');
+    if (!DASHBOARD_ACTIONS.has(action)) {
+      applied.push({ action, ok: false, say: '该动作不允许从看板触发' });
+      continue;
+    }
+    try {
+      const r = core.run({ action, state: cur, args: cmd.args || {}, ts }, env);
+      if (r.ok && r.state) {
+        cur = r.state;
+        applied.push({ action, ok: true, say: r.say || '', note: cmd.note || '' });
+      } else {
+        applied.push({ action, ok: false, say: r.say || r.code || '执行失败', note: cmd.note || '' });
+      }
+    } catch (err) {
+      console.error('[pet] 队列指令执行异常', action, err && err.stack);
+      applied.push({ action, ok: false, say: '执行异常：' + (err && err.message) });
+    }
+  }
+  return { state: cur, applied };
+}
+
+/** 家长看板要的那一份 JSON（已经算好 level、任务、待送达） */
+function parentSnapshot(env) {
+  const st = store.load(env);
+  const now = core.nowSec();
+  const cfg = core.resolveConfig(env);
+  const out = {
+    ok: true,
+    backend: store.backend(env),
+    server_ts: now,
+    age_sec: st.updatedAt ? Math.max(0, now - st.updatedAt) : null,
+    source: st.source || '',
+    state_present: !!st.state,
+    status: null,
+    tasks: [],
+    events: st.events,
+    pending: st.pending,
+    has_key: !!process.env.PET_KEY,
+    pet_name: (process.env.PET_NAME || core.DEFAULTS.PET_NAME),
+  };
+  if (!st.state) return out;
+
+  try {
+    const doc = core.normalizeDoc(st.state, cfg);
+    out.status = core.getStatus(doc, cfg, now);
+    out.tasks = (doc.tasks || [])
+      .filter((t) => t && t.id && t.status !== 'done')
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 12)
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        reward: t.reward,
+        status: t.status,
+        submittedAt: t.submittedAt || 0,
+      }));
+  } catch (err) {
+    console.warn('[pet] 快照解析失败：' + (err && err.message));
+  }
+  return out;
 }
 
 exports.main_handler = async (event, context) => {
@@ -160,7 +285,16 @@ exports.main_handler = async (event, context) => {
   const proto = req.headers['x-forwarded-proto'] || 'https';
   const endpoint = `${proto}://${host}${req.path}`;
 
-  if (req.method === 'GET') {
+  /* 家长看板识别：?page=parent 或路径末尾 /parent 都认 */
+  const isParent = String(req.query.page || '') === 'parent' || /\/parent\/?$/.test(req.path || '');
+  const isParentApi = isParent && String(req.query.api || '') === '1';
+
+  /* 页面壳子不含任何宠物数据，先给出去，免得没口令时看到一片白 */
+  if (isParent && !isParentApi && req.method === 'GET') {
+    return html(200, parent.renderParentPage(process.env.PET_NAME || core.DEFAULTS.PET_NAME));
+  }
+
+  if (req.method === 'GET' && !isParent) {
     return html(200, helpPage(endpoint));
   }
 
@@ -174,12 +308,54 @@ exports.main_handler = async (event, context) => {
     }
   }
 
+  /* ---------------- 家长看板接口 ---------------- */
+  if (isParentApi) {
+    if (req.method === 'GET') {
+      return json(200, parentSnapshot(process.env));
+    }
+
+    const body = req.body || {};
+    const cmd = String(body.cmd || body.action || '');
+    if (!DASHBOARD_ACTIONS.has(cmd)) {
+      return json(400, { ok: false, code: 'BAD_CMD', say: '看板不支持这个操作：' + (cmd || '(空)') });
+    }
+    const args = body.args && typeof body.args === 'object' ? body.args : {};
+    if (cmd === 'task_publish' && !String(args.title || '').trim()) {
+      return json(400, { ok: false, code: 'NO_TITLE', say: '任务内容不能为空。' });
+    }
+
+    /* 确认/退回时把任务名带上，事件流里写「家长确认「收拾书包」完成」比「确认任务」有用得多 */
+    if ((cmd === 'task_approve' || cmd === 'task_reject') && args.task_id) {
+      const snap = parentSnapshot(process.env);
+      const hit = (snap.tasks || []).find((t) => t.id === args.task_id);
+      if (hit) args._title = hit.title;
+    }
+
+    const note = describeCmd(cmd, args);
+    const n = store.pushPending(process.env, cmd, args, note);
+    /* 这里刻意不写事件流：排队中的指令由看板的「等待送达」区展示，
+       事件流只记真实发生过的事，否则一条指令会留下「已排队」+「已送达」两条噪音。 */
+    console.log('[pet] 家长看板排队 ' + cmd + ' 队列长度=' + n);
+    return json(200, { ok: true, queued: n, say: note + '，已排队' });
+  }
+
   const body = req.body || {};
   const action = body.action || req.query.action || 'sync';
+  const deviceTs = body.ts || body.client_ts;
 
   // 小体量请求，不设流控；这里只挡明显异常的体积，防误传整个固件
   if (JSON.stringify(body).length > 64 * 1024) {
     return json(413, { ok: false, code: 'TOO_LARGE', say: '请求体过大，state 应该在 4KB 以内。' });
+  }
+
+  /* 设备这次请求顺路当一次「送货」：把家长看板排队的指令压进它上报的 state。
+     没有 state（首次初始化）就跳过 —— 队列留着，等有 state 再送。 */
+  let incoming = body.state === undefined ? null : body.state;
+  let applied = [];
+  if (incoming && typeof incoming === 'object') {
+    const merged = drainPending(process.env, incoming, deviceTs);
+    incoming = merged.state;
+    applied = merged.applied;
   }
 
   const t0 = Date.now();
@@ -188,9 +364,9 @@ exports.main_handler = async (event, context) => {
     out = core.run(
       {
         action,
-        state: body.state === undefined ? null : body.state,
+        state: incoming,
         args: body.args || {},
-        ts: body.ts || body.client_ts,
+        ts: deviceTs,
       },
       process.env
     );
@@ -202,6 +378,21 @@ exports.main_handler = async (event, context) => {
       say: '云端出了点问题，宠物先在本地待着。',
       error: String(err && err.message),
     });
+  }
+
+  /* 给家长看板留一份快照。写失败不影响设备，store 内部已兜住异常。 */
+  if (out && out.state) {
+    store.updateSnapshot(process.env, out.state, { deviceTs, source: action });
+  }
+  for (const a of applied) {
+    store.addEvent(
+      process.env,
+      (a.ok ? '已送达：' : '未生效：') + (a.note || a.action) + (a.ok ? '' : '（' + (a.say || '') + '）'),
+      'deliver'
+    );
+  }
+  if (applied.length) {
+    out.applied = applied;
   }
 
   const cost = Date.now() - t0;

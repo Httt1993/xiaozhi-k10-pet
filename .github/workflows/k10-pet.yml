@@ -8,6 +8,19 @@ name: Build K10 Pet Firmware
 
 on:
   workflow_dispatch:
+    inputs:
+      cloud_url:
+        description: '腾讯云 SCF 函数 URL（留空 = 本地模式）。填了会写进 pet_config.h 的 PET_CLOUD_URL'
+        required: false
+        default: ''
+      cloud_key:
+        description: 'X-Pet-Key 共享口令（要和云函数环境变量 PET_KEY 一致）'
+        required: false
+        default: ''
+      heartbeat_sec:
+        description: '心跳间隔秒数（300 = 5 分钟，0 = 关闭）'
+        required: false
+        default: '300'
 
 permissions:
   contents: read
@@ -35,8 +48,9 @@ jobs:
           D=main/boards/dfrobot/df-k10
           echo "--- 板级目录 ---"
           ls -1 "$D"
-          echo "--- 必须存在的 7 个补丁文件 ---"
-          for f in pet_config.h pet_strip.h pet_strip.cc pet_sensors.h pet_sensors.cc pet_tools.h pet_tools.cc; do
+          echo "--- 必须存在的补丁文件 ---"
+          for f in pet_config.h pet_strip.h pet_strip.cc pet_sensors.h pet_sensors.cc \
+                   pet_tools.h pet_tools.cc pet_cloud.h pet_cloud.cc pet_face_view.h pet_face_view.cc; do
             test -f "$D/$f" || { echo "::error::缺文件 $D/$f，补丁没提交完整"; exit 1; }
             echo "  ok  $f"
           done
@@ -45,6 +59,33 @@ jobs:
           echo "PET_PATCH_MARK 出现 $N 次（应为 3）"
           test "$N" -ge 3 || { echo "::error::df_k10_board.cc 的补丁没打上"; exit 1; }
           grep -q "new PetTools(" "$D/df_k10_board.cc" || { echo "::error::PetTools 没有注册"; exit 1; }
+
+      - name: 注入云端配置（可选）
+        shell: bash
+        env:
+          CLOUD_URL: ${{ inputs.cloud_url }}
+          CLOUD_KEY: ${{ inputs.cloud_key }}
+          BEAT_SEC: ${{ inputs.heartbeat_sec }}
+        run: |
+          set -e
+          D=main/boards/dfrobot/df-k10
+          # 口令在日志里打码，避免 Actions 页面上明文可见
+          if [ -n "$CLOUD_KEY" ]; then
+            echo "::add-mask::$CLOUD_KEY"
+          fi
+          if [ -z "$CLOUD_URL" ]; then
+            echo "未传 cloud_url，保持本地模式（PET_CLOUD_URL 为空）"
+            exit 0
+          fi
+          # 末尾补斜杠，避免固件拼路径时出现 https://hostv1 这种
+          case "$CLOUD_URL" in
+            */) : ;;
+            *) CLOUD_URL="$CLOUD_URL/" ;;
+          esac
+          echo "写入 PET_CLOUD_URL = $CLOUD_URL"
+          python scripts/patch_cloud_cfg.py "$D/pet_config.h" "$CLOUD_URL" "$CLOUD_KEY" "$BEAT_SEC"
+          # 自检：注入后必须真的变了，否则产物会静默退回本地模式
+          grep -q "PET_CLOUD_URL \"http" "$D/pet_config.h" || { echo "::error::URL 注入失败"; exit 1; }
 
       - name: 编译
         shell: bash
