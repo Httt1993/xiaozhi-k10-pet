@@ -18,6 +18,15 @@
 
 #include "board.h"
 
+/* PET_PATCH_MARK: 只有当前板子目录里存在 pet_face.h 时才启用宠物猫脸，
+ * 这样同一份 display 代码在其他板子上完全不受影响。 */
+#if defined(__has_include)
+#  if __has_include("pet_face.h")
+#    include "pet_face.h"
+#    define PET_FACE_AVAILABLE 1
+#  endif
+#endif
+
 #define TAG "LcdDisplay"
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
@@ -415,6 +424,21 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_pad_row(container_, 0, 0);
     lv_obj_set_style_bg_color(container_, lvgl_theme->background_color(), 0);
     lv_obj_set_style_border_color(container_, lvgl_theme->border_color(), 0);
+
+#ifdef PET_FACE_AVAILABLE
+    /* 宠物猫脸：作为最底层背景插入。
+     * container_ 是 LV_FLEX_FLOW_COLUMN 布局，普通子对象会被 flex 重新摆位，
+     * 所以必须加 LV_OBJ_FLAG_IGNORE_LAYOUT，再 move_to_index(0) 压到最底，
+     * 让状态栏、聊天文字仍然显示在猫脸之上。 */
+    pet_face_img_ = lv_img_create(container_);
+    lv_img_set_src(pet_face_img_, &pet_face_idle);
+    lv_obj_add_flag(pet_face_img_, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_remove_flag(pet_face_img_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(pet_face_img_, 0, 0);
+    lv_obj_move_to_index(pet_face_img_, 0);
+    ESP_LOGI(TAG, "PET_PATCH: pet face enabled as background (%dx%d)", pet_face_idle.header.w,
+             pet_face_idle.header.h);
+#endif
 
     /* Layer 1: Top bar - for status icons */
     top_bar_ = lv_obj_create(container_);
@@ -1134,6 +1158,13 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",
                  emotion);
     }
+#ifdef PET_FACE_AVAILABLE
+    /* 启用猫脸时不再叠加官方 emoji 贴图/字体表情：
+     * 猫脸是常驻底图，再叠一个圆形 emoji 会变成"两只脸"。 */
+    if (pet_face_img_ != nullptr) {
+        return;
+    }
+#endif
     if (emoji_image_ == nullptr) {
         if (setup_ui_called_) {
             ESP_LOGW(TAG,

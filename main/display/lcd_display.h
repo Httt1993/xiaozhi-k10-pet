@@ -29,6 +29,9 @@ protected:
     std::unique_ptr<LvglGif> gif_controller_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
+    /* PET_PATCH_MARK: 宠物猫脸常驻底图。非空表示本次构建启用了自定义猫脸，
+     * 此时官方 emoji 贴图不再显示（SetEmotion 直接跳过），屏幕上只有猫脸。 */
+    lv_obj_t* pet_face_img_ = nullptr;
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
     bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
