@@ -94,15 +94,29 @@ function updateSnapshot(env, state, meta) {
   return save(env, st);
 }
 
-/** 家长在看板上点了一下：进队列，等设备联网时执行 */
-function pushPending(env, action, args, note) {
+/**
+ * 家长在看板上点了一下：进队列，等设备联网时执行。
+ *
+ * at 用**毫秒**，有两个用处：
+ *   1. 看板拿它判断「这条有没有被设备处理过」（和 state.pet.cmdAck 比大小）；
+ *   2. 同一条指令重发时 at 不变，于是能在这里去重 —— 看板发现没回执就重发，
+ *      落到同一个实例上不会变成两条。
+ * 调用方不传 at 就用当前时间。
+ */
+function pushPending(env, action, args, note, atMs) {
   const st = load(env);
+  const act = String(action || '');
+  const at = Number(atMs) > 0 ? Math.round(Number(atMs)) : Date.now();
+
+  if (st.pending.some((x) => x.at === at && x.action === act)) {
+    return st.pending.length;   // 重复提交，已经排着了
+  }
   if (st.pending.length >= 20) st.pending.shift();
   st.pending.push({
-    action: String(action || ''),
+    action: act,
     args: args && typeof args === 'object' ? args : {},
     note: String(note || ''),
-    at: Math.floor(Date.now() / 1000),
+    at,
   });
   save(env, st);
   return st.pending.length;

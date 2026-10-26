@@ -95,9 +95,50 @@ footer{text-align:center;color:#b0a698;font-size:11.5px;margin-top:18px;line-hei
 
 const JS = `
 var KEY_STORE='pet_key';
+var Q_STORE='pet_cmdq';        /* 我在这个手机上点过的指令，等设备回执 */
+var RETRY_MS=30000;            /* 没回执就重发：云函数可能同时活着好几个实例，
+                                  指令只排在其中一个的内存里，重发是为了让每个活着的实例都拿到 */
+var GIVE_UP_MS=8*60*1000;      /* 8 分钟还没确认就不再自动重发（不删，等设备下次上报再说） */
 var data=null;
 
 function el(id){return document.getElementById(id)}
+
+/* ---- 本机指令队列：解决「云函数多实例导致指令静默丢失」 ---- */
+function qload(){
+  try{ var a=JSON.parse(localStorage.getItem(Q_STORE)||'[]'); return a instanceof Array ? a : []; }
+  catch(e){ return []; }
+}
+function qsave(a){
+  try{ localStorage.setItem(Q_STORE, JSON.stringify(a.slice(-20))); }catch(e){}
+}
+/* 设备已经把指令处理到 at 号了（这个值存在设备 NVS 里，最可靠） */
+function ackNo(){ return (data && data.ack) ? data.ack : 0; }
+function myPending(){
+  var a=ackNo(), all=qload(), out=[];
+  for(var i=0;i<all.length;i++){ if(!(all[i].at<=a)) out.push(all[i]); }
+  return out;
+}
+function qdrop(){
+  var a=ackNo(), all=qload(), keep=[];
+  for(var i=0;i<all.length;i++){ if(!(all[i].at<=a)) keep.push(all[i]); }
+  if(keep.length!==all.length) qsave(keep);
+}
+function qpost(it){
+  var h={'Content-Type':'application/json'};
+  if(q()) h['X-Pet-Key']=q();
+  return fetch(apiUrl(),{method:'POST',headers:h,body:JSON.stringify({cmd:it.cmd,args:it.args,at:it.at})})
+    .then(function(r){return r.json()});
+}
+/* 每条没回执的指令再发一次（同一个 at，云端会去重，不会重复生效） */
+function qretry(){
+  var now=Date.now(), all=qload();
+  for(var i=0;i<all.length;i++){
+    var it=all[i];
+    if(it.at<=ackNo()) continue;
+    if(now-it.at>GIVE_UP_MS) continue;
+    qpost(it).catch(function(){});
+  }
+}
 
 /* 口令优先级：地址栏 ?key= > 本机记住的 */
 function q(){
@@ -133,6 +174,7 @@ function ago(sec){
 
 function fmtTime(ts){
   if(!ts) return '--:--';
+  if(ts>1e12) ts=Math.floor(ts/1000);   // 排队指令的 at 是毫秒
   var d=new Date(ts*1000);
   var p=function(n){return n<10?'0'+n:''+n};
   return p(d.getHours())+':'+p(d.getMinutes());
@@ -220,19 +262,21 @@ function render(){
   }
   html+='</div>';
 
-  if(data.pending&&data.pending.length){
+  /* 用本机队列而不是云端队列：云端那份只存在于某一个热实例里，
+     换个实例就读不到，看着像「指令消失」，其实还在路上 */
+  var mine=myPending();
+  if(mine.length){
     html+='<div class="card"><h2>等待送达</h2>';
-    for(var k=0;k<data.pending.length;k++){
-      html+='<div class="ev"><time>'+fmtTime(data.pending[k].at)+'</time><span>'+
-        (data.pending[k].note||data.pending[k].action)+' · 等设备下次心跳或孩子说话时生效</span></div>';
+    for(var k=0;k<mine.length;k++){
+      html+='<div class="ev"><time>'+fmtTime(mine[k].at)+'</time><span>'+
+        (mine[k].note||mine[k].cmd)+' · 每 30 秒自动重发，设备心跳取到后变「已送达」</span></div>';
     }
     html+='</div>';
   }
 
-  html+='<footer>指令先排队，设备下次心跳（最多 5 分钟）或孩子跟小智说话时送达。<br>'+
-    '存储方式：'+(data.backend==='file'?'本地文件':'云端内存（云函数热实例）')+
-    (data.backend==='file'?'':'——实例被回收时排队中的指令会丢，设备离线超过十分钟就别急着点')+
-    '</footer>';
+  html+='<footer>指令先排队，设备下次心跳（最多 5 分钟）或孩子跟小智说话时送达；'+
+    '没收到回执会自动重发（同一条不会重复生效）。<br>'+
+    '云端快照存在云函数热实例内存里 —— 实例被回收后这一页会短暂变空，设备下次上报就回来，状态本身在设备上不会丢。</footer>';
 
   el('body').innerHTML=html;
   bind();
@@ -263,15 +307,14 @@ function bind(){
 }
 
 function send(cmd,args,okMsg){
-  var h={'Content-Type':'application/json'};
-  if(q()) h['X-Pet-Key']=q();
-  fetch(apiUrl(),{method:'POST',headers:h,body:JSON.stringify({cmd:cmd,args:args})})
-    .then(function(r){return r.json()})
+  var it={cmd:cmd,args:args||{},at:Date.now(),note:okMsg};
+  var all=qload(); all.push(it); qsave(all);
+  qpost(it)
     .then(function(j){
-      if(j.ok){ toast(okMsg+'，等孩子跟小智说话时送达'); refresh(); }
+      if(j.ok){ toast('已排队，正在送达（最多 5 分钟）'); refresh(); }
       else { toast(j.say||'没成功'); }
     })
-    .catch(function(){ toast('网络好像不通'); });
+    .catch(function(){ toast('网络好像不通，这条会自己重试'); });
 }
 
 function refresh(){
@@ -282,7 +325,14 @@ function refresh(){
       if(r.status===401){ el('gate').style.display='flex'; return null; }
       return r.json();
     })
-    .then(function(j){ if(j){ data=j; render(); el('gate').style.display='none'; } })
+    .then(function(j){
+      if(j){
+        data=j;
+        qdrop();     /* 设备回执到的指令从本机队列删掉 */
+        render();
+        el('gate').style.display='none';
+      }
+    })
     .catch(function(){});
 }
 
@@ -294,6 +344,8 @@ el('gok').onclick=function(){
 };
 refresh();
 setInterval(refresh,15000);
+setInterval(qretry,RETRY_MS);
+qretry();
 `;
 
 function renderParentPage(petName) {

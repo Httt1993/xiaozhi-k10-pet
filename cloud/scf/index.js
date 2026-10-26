@@ -188,8 +188,13 @@ function describeCmd(cmd, args) {
  *   pet-core 是纯函数（输入 state 出 state），不碰 IO，
  *   所以队列这一层必须留在 index.js。这样核心还能单测。
  *
- * 队列先清空再执行（见 store.takePending）：
- *   宁可丢一条，也不能重放 —— 重复发币比丢一条糟得多。
+ * 为什么还要 cmdAck：
+ *   云函数可能同时活着好几个实例，队列只在其中一个实例的内存里，
+ *   设备心跳落到别的实例就取不到 —— 指令会静默消失。
+ *   所以看板会「没看到回执就重发」，同一条指令可能落到多个实例。
+ *   state.pet.cmdAck 记的是「已处理到哪一号」，它存在设备 NVS 里、
+ *   每次上报都带回来，所以是全网唯一可靠的去重依据：
+ *   凡是 at <= cmdAck 的一律跳过，重复提交不会重复生效。
  */
 function drainPending(env, state, ts) {
   const queue = store.takePending(env);
@@ -197,26 +202,49 @@ function drainPending(env, state, ts) {
 
   let cur = state;
   const applied = [];
+  let ack = Number(cur && cur.pet && cur.pet.cmdAck) || 0;
 
-  for (const cmd of queue) {
+  /* 按时间排序：家长连点两下时，先点的先执行 */
+  const ordered = queue.slice().sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+
+  for (const cmd of ordered) {
     const action = String(cmd.action || '');
-    if (!DASHBOARD_ACTIONS.has(action)) {
-      applied.push({ action, ok: false, say: '该动作不允许从看板触发' });
+    const at = Number(cmd.at) || 0;
+
+    if (at > 0 && at <= ack) {
+      applied.push({ action, ok: true, skipped: true, at, note: cmd.note || '',
+                     say: '这条已经执行过了（重复提交已跳过）' });
       continue;
     }
+
+    if (!DASHBOARD_ACTIONS.has(action)) {
+      applied.push({ action, ok: false, at, say: '该动作不允许从看板触发' });
+      if (at > ack) ack = at;
+      continue;
+    }
+
     try {
       const r = core.run({ action, state: cur, args: cmd.args || {}, ts }, env);
       if (r.ok && r.state) {
         cur = r.state;
-        applied.push({ action, ok: true, say: r.say || '', note: cmd.note || '' });
+        applied.push({ action, ok: true, at, say: r.say || '', note: cmd.note || '' });
       } else {
-        applied.push({ action, ok: false, say: r.say || r.code || '执行失败', note: cmd.note || '' });
+        applied.push({ action, ok: false, at, say: r.say || r.code || '执行失败', note: cmd.note || '' });
       }
     } catch (err) {
       console.error('[pet] 队列指令执行异常', action, err && err.stack);
-      applied.push({ action, ok: false, say: '执行异常：' + (err && err.message) });
+      applied.push({ action, ok: false, at, say: '执行异常：' + (err && err.message) });
+    }
+
+    /* 失败也要记 ack：否则看板会以为是没送到，一直重发同一条。
+       失败原因（比如金币不够）重发一百次也一样失败。 */
+    if (at > ack) {
+      ack = at;
+      if (cur && cur.pet) cur.pet.cmdAck = ack;
     }
   }
+
+  if (cur && cur.pet && (Number(cur.pet.cmdAck) || 0) < ack) cur.pet.cmdAck = ack;
   return { state: cur, applied };
 }
 
@@ -236,6 +264,9 @@ function parentSnapshot(env) {
     tasks: [],
     events: st.events,
     pending: st.pending,
+    /* 设备已经把指令处理到哪一号（毫秒）。看板拿它和本地指令的 at 比，
+       判断「已送达」还是「还在路上、该重发」。 */
+    ack: 0,
     has_key: !!process.env.PET_KEY,
     pet_name: (process.env.PET_NAME || core.DEFAULTS.PET_NAME),
   };
@@ -244,6 +275,7 @@ function parentSnapshot(env) {
   try {
     const doc = core.normalizeDoc(st.state, cfg);
     out.status = core.getStatus(doc, cfg, now);
+    out.ack = Number(doc.pet && doc.pet.cmdAck) || 0;
     out.tasks = (doc.tasks || [])
       .filter((t) => t && t.id && t.status !== 'done')
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
@@ -332,11 +364,17 @@ exports.main_handler = async (event, context) => {
     }
 
     const note = describeCmd(cmd, args);
-    const n = store.pushPending(process.env, cmd, args, note);
+    /* 看板重发时会带上原来的 at（毫秒），云端据此去重；
+       首次提交没带，就用此刻。
+       注意：body.at 只用于「同一条指令的标识」，不参与任何数值计算，
+       所以伪造它最多让自己那条被当成旧指令跳过，改不了宠物状态。 */
+    const clientAt = Number(body.at) > 0 ? Math.round(Number(body.at)) : 0;
+    const at = clientAt || Date.now();
+    const n = store.pushPending(process.env, cmd, args, note, at);
     /* 这里刻意不写事件流：排队中的指令由看板的「等待送达」区展示，
        事件流只记真实发生过的事，否则一条指令会留下「已排队」+「已送达」两条噪音。 */
-    console.log('[pet] 家长看板排队 ' + cmd + ' 队列长度=' + n);
-    return json(200, { ok: true, queued: n, say: note + '，已排队' });
+    console.log('[pet] 家长看板排队 ' + cmd + ' at=' + at + ' 队列长度=' + n);
+    return json(200, { ok: true, queued: n, at, say: note + '，已排队' });
   }
 
   const body = req.body || {};

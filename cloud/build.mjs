@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -22,9 +23,45 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCF_DIR = path.join(__dirname, 'scf');
 const OUT_DIR = path.join(__dirname, 'dist');
 const OUT_ZIP = path.join(OUT_DIR, 'pet-cloud-scf.zip');
+const STAMP = path.join(OUT_DIR, 'scf.stamp.json');
 
 // 要打进包的文件（顺序固定，便于比对）
 const FILES = ['index.js', 'pet-core.js', 'store.js', 'parent.js', 'package.json'];
+
+/* ---------------------------------------------------------------- 指纹
+ * 只看 mtime 会骗人：改完又改回来、系统时钟跳一下、从 git 拉一份旧文件覆盖，
+ * mtime 都可能是"新"的。所以改成按内容算 sha256。
+ */
+function sha256(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function sourceDigest() {
+  const h = crypto.createHash('sha256');
+  const files = {};
+  const missing = [];
+  for (const f of FILES) {
+    const p = path.join(SCF_DIR, f);
+    if (!fs.existsSync(p)) {
+      missing.push(f);
+      continue;
+    }
+    const buf = fs.readFileSync(p);
+    files[f] = { size: buf.length, sha256: sha256(buf) };
+    h.update(f).update('\0').update(buf).update('\0');
+  }
+  return { digest: h.digest('hex'), files, missing };
+}
+
+function readVersion() {
+  try {
+    const src = fs.readFileSync(path.join(SCF_DIR, 'index.js'), 'utf8');
+    const m = src.match(/const\s+VERSION\s*=\s*['"]([^'"]+)['"]/);
+    return m ? m[1] : 'unknown';
+  } catch (_) {
+    return 'unknown';
+  }
+}
 
 let checkPass = 0;
 let checkFail = 0;
@@ -42,6 +79,96 @@ function check(cond, label, detail) {
 function die(msg) {
   console.error(`\n✗ ${msg}`);
   process.exit(1);
+}
+
+/* ---------------------------------------------------------------- --check
+ * 只读校验，不打包、不跑冒烟测试，一秒出结果，适合"上传前先看一眼"。
+ *   node build.mjs --check          人话输出
+ *   node build.mjs --check --json   给脚本用
+ * 退出码：0 = 包是最新的；1 = 过期/缺失
+ */
+if (process.argv.includes('--check')) {
+  const asJson = process.argv.includes('--json');
+  const now = sourceDigest();
+  const ver = readVersion();
+  const out = { ok: false, version: ver, zip: OUT_ZIP, problems: [] };
+
+  if (now.missing.length) {
+    out.problems.push('源文件缺失：' + now.missing.join(', '));
+  }
+  if (!fs.existsSync(OUT_ZIP)) {
+    out.problems.push('还没有 zip，先跑 node build.mjs');
+  }
+  if (!fs.existsSync(STAMP)) {
+    out.problems.push('zip 存在但缺少指纹记录 dist/scf.stamp.json（老包，无法判定），重跑 node build.mjs 即可');
+  }
+
+  if (!out.problems.length) {
+    let stamp;
+    try {
+      stamp = JSON.parse(fs.readFileSync(STAMP, 'utf8'));
+    } catch (err) {
+      out.problems.push('指纹文件读不动：' + err.message);
+    }
+
+    if (stamp) {
+      out.built_at = stamp.built_at;
+      out.built_digest = stamp.digest;
+      out.digest = now.digest;
+
+      // 1) 源文件有没有动过
+      if (stamp.digest !== now.digest) {
+        const changed = Object.keys(now.files).filter((f) => {
+          const old = (stamp.files || {})[f];
+          return !old || old.sha256 !== now.files[f].sha256;
+        });
+        const added = Object.keys(now.files).filter((f) => !(stamp.files || {})[f]);
+        const detail = Array.from(new Set(changed.concat(added)));
+        out.problems.push('源码已改动，zip 过期：' + (detail.join(', ') || '未知文件'));
+      }
+
+      // 2) zip 本身有没有被替换/手工改过
+      const zipBuf = fs.readFileSync(OUT_ZIP);
+      const zipSha = sha256(zipBuf);
+      out.zip_sha256 = zipSha;
+      out.zip_size = zipBuf.length;
+      if (stamp.zip_sha256 && stamp.zip_sha256 !== zipSha) {
+        out.problems.push('zip 内容与打包记录不一致（被替换或损坏），重跑 node build.mjs');
+      }
+
+      // 3) 版本号对不上也要提醒
+      if (stamp.version && stamp.version !== ver) {
+        out.problems.push(`版本号不一致：源码 v${ver}，打包时 v${stamp.version}`);
+      }
+    }
+  }
+
+  out.ok = out.problems.length === 0;
+
+  if (asJson) {
+    console.log(JSON.stringify(out, null, 2));
+  } else {
+    console.log('');
+    console.log(`  源码版本   v${ver}`);
+    console.log(`  源码指纹   ${(out.digest || now.digest).slice(0, 16)}…`);
+    if (out.built_at) {
+      console.log(`  打包时间   ${out.built_at}`);
+      console.log(`  包内指纹   ${String(out.built_digest).slice(0, 16)}…`);
+      console.log(`  包大小     ${(out.zip_size / 1024).toFixed(1)} KB`);
+    }
+    console.log('');
+    if (out.ok) {
+      console.log('  ✓ 本机 zip 是最新的，可以直接上传');
+      console.log(`    ${OUT_ZIP}`);
+    } else {
+      console.log('  ✗ 不能直接上传：');
+      for (const p of out.problems) console.log('    · ' + p);
+      console.log('');
+      console.log('  修法：node build.mjs   （重打包 + 40 项自检）');
+    }
+    console.log('');
+  }
+  process.exit(out.ok ? 0 : 1);
 }
 
 // ---------------------------------------------------------------- 1. 文件齐不齐
@@ -180,7 +307,8 @@ try {
   check(q.ok && q.queued === 1, '看板点喂饭进入队列');
 
   /* 设备再上报 → 队列被消费，饱食度真的涨了 */
-  await handler(postEvent({ action: 'sync', state: s }), env);
+  const dres = await handler(postEvent({ action: 'sync', state: s }), env);
+  const sDelivered = JSON.parse(dres.body).state;   /* 带 cmdAck 的那份，设备会存进 NVS */
   const after = JSON.parse((await handler(apiGet(), env)).body);
   check(after.pending.length === 0, '设备上报后队列被清空（指令已送达）');
   check(
@@ -192,6 +320,39 @@ try {
     after.events.some((e) => String(e.text).indexOf('已送达') >= 0),
     '送达结果写进了家长事件流'
   );
+
+  /* ---- 幂等与回执 ----
+     云函数会同时活着好几个实例，指令只排在其中一个的内存里，
+     设备心跳可能落到别的实例 -> 看板收不到回执就会重发。
+     所以必须保证：同一条指令重发多少次，都只生效一次。 */
+  const d1res = await handler(postEvent({ action: 'sync', state: sDelivered }), env);
+  const ackAt = JSON.parse(d1res.body).state.pet.cmdAck;
+  check(ackAt > 0, '送达后 state.pet.cmdAck 被写上（设备会把它存进 NVS）', { ackAt });
+
+  /* 模拟看板重发同一条（同一时刻的 at），落到「另一个实例」 */
+  const retry = JSON.parse((await handler(apiPost({ cmd: 'feed', args: { food: '苹果' }, at: ackAt }), env)).body);
+  check(retry.ok && retry.at === ackAt, '重发沿用原来的 at（云端据此认出是同一条）');
+
+  /* 设备带着 cmdAck 上报：这条必须被跳过，不能二次喂饭 */
+  const d2res = await handler(postEvent({ action: 'sync', state: sDelivered }), env);
+  const d2 = JSON.parse(d2res.body);
+  check(
+    Array.isArray(d2.applied) && d2.applied[0] && d2.applied[0].skipped === true,
+    '重复指令被判为「已执行过」而不是再执行一次',
+    d2.applied
+  );
+  check(d2.status.coins === 18 && d2.status.hunger === 80, '重发没有让金币和饱食度再变一次',
+        'hunger=' + d2.status.hunger + ' coins=' + d2.status.coins);
+
+  /* 队列层去重：同一条（同 action + 同 at）提交两次只排一条 */
+  const atX = Date.now();
+  await handler(apiPost({ cmd: 'play', args: {}, at: atX }), env);
+  const dup = JSON.parse((await handler(apiPost({ cmd: 'play', args: {}, at: atX }), env)).body);
+  check(dup.queued === 1, '同一条指令重复提交只排一条', { queued: dup.queued });
+
+  /* 看板能读到回执号，用来判断「已送达」 */
+  const snap2 = JSON.parse((await handler(apiGet(), env)).body);
+  check(snap2.ack === ackAt, '看板能从快照里读到回执号', { ack: snap2.ack, ackAt });
 
   /* 非法指令要拒绝，避免看板被当成提币口 */
   const bad = await handler(apiPost({ cmd: 'coins', args: { delta: 999 } }), env);
@@ -255,9 +416,24 @@ function crc32(buf) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-/** 固定时间戳，保证同样内容打出来的 zip 字节一致（便于校验） */
+/**
+ * 固定时间戳，保证同样内容打出来的 zip 字节一致（便于校验）
+ */
 const DOS_TIME = (12 << 11) | (0 << 5) | (0 >> 1);
 const DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1;
+
+/**
+ * 压缩方式用 deflate（method=8），不用 store（method=0）。
+ *
+ * 最初写的是 store —— 结构合法、本地能解开，但腾讯云 BuildCodeViaSCF 那一步
+ * 对"全不压缩"的包不友好，实测报 `EntryFile did not find in code or layers`。
+ * 换成 deflate 顺带把 64 KB 压到 15 KB，上传更快，也更接近各大工具产出的常规包。
+ */
+function deflate(buf) {
+  const out = zlib.deflateRawSync(buf, { level: 9 });
+  // 极小文件压缩后可能反而更大，那就老实存原文，仍是合法的 zip
+  return out.length < buf.length ? out : null;
+}
 
 function makeZip(entries) {
   const locals = [];
@@ -268,31 +444,34 @@ function makeZip(entries) {
     const name = Buffer.from(e.name.replace(/\\/g, '/'), 'utf8');
     const data = e.data;
     const crc = crc32(data);
+    const packed = deflate(data);
+    const body = packed || data;
+    const method = packed ? 8 : 0;
 
     const lh = Buffer.alloc(30);
     lh.writeUInt32LE(0x04034b50, 0);
     lh.writeUInt16LE(20, 4);          // version needed
     lh.writeUInt16LE(0x0800, 6);      // flags: UTF-8
-    lh.writeUInt16LE(0, 8);           // store
+    lh.writeUInt16LE(method, 8);      // 8 = deflate, 0 = store
     lh.writeUInt16LE(DOS_TIME, 10);
     lh.writeUInt16LE(DOS_DATE, 12);
     lh.writeUInt32LE(crc, 14);
-    lh.writeUInt32LE(data.length, 18);
-    lh.writeUInt32LE(data.length, 22);
+    lh.writeUInt32LE(body.length, 18);   // 压缩后
+    lh.writeUInt32LE(data.length, 22);   // 原始
     lh.writeUInt16LE(name.length, 26);
     lh.writeUInt16LE(0, 28);
-    locals.push(lh, name, data);
+    locals.push(lh, name, body);
 
     const ch = Buffer.alloc(46);
     ch.writeUInt32LE(0x02014b50, 0);
     ch.writeUInt16LE(20, 4);          // version made by
     ch.writeUInt16LE(20, 6);          // version needed
     ch.writeUInt16LE(0x0800, 8);
-    ch.writeUInt16LE(0, 10);
+    ch.writeUInt16LE(method, 10);
     ch.writeUInt16LE(DOS_TIME, 12);
     ch.writeUInt16LE(DOS_DATE, 14);
     ch.writeUInt32LE(crc, 16);
-    ch.writeUInt32LE(data.length, 20);
+    ch.writeUInt32LE(body.length, 20);
     ch.writeUInt32LE(data.length, 24);
     ch.writeUInt16LE(name.length, 28);
     ch.writeUInt16LE(0, 30);          // extra
@@ -303,7 +482,7 @@ function makeZip(entries) {
     ch.writeUInt32LE(offset, 42);
     centrals.push(Buffer.concat([ch, name]));
 
-    offset += lh.length + name.length + data.length;
+    offset += lh.length + name.length + body.length;
   }
 
   const cd = Buffer.concat(centrals);
@@ -341,16 +520,37 @@ check(zip.readUInt16LE(eocdPos + 8) === FILES.length, `zip 内含 ${FILES.length
 let badPath = false;
 let p = 0;
 const seen = [];
+const methods = [];
+const badRoundtrip = [];
 while (p < zip.length - 22 && zip.readUInt32LE(p) === 0x04034b50) {
   const nameLen = zip.readUInt16LE(p + 26);
+  const method = zip.readUInt16LE(p + 8);
   const compSize = zip.readUInt32LE(p + 18);
   const name = zip.slice(p + 30, p + 30 + nameLen).toString('utf8');
   if (name.includes('\\') || name.startsWith('/') || name.includes('../')) badPath = true;
+  methods.push(method);
   seen.push(name);
+
+  // 反向验证：用标准 inflate 把这一个条目解回来，和源文件逐字节比
+  const body = zip.slice(p + 30 + nameLen, p + 30 + nameLen + compSize);
+  try {
+    const raw = method === 8 ? zlib.inflateRawSync(body) : body;
+    const src = fs.readFileSync(path.join(SCF_DIR, name));
+    if (!raw.equals(src)) badRoundtrip.push(name + '（内容不一致）');
+  } catch (err) {
+    badRoundtrip.push(name + '（' + err.message + '）');
+  }
+
   p += 30 + nameLen + compSize;
 }
 check(!badPath, 'zip 内路径全部使用正斜杠且无目录前缀');
 check(FILES.every((f) => seen.includes(f)), '条目与预期一致：' + seen.join(', '));
+check(badRoundtrip.length === 0, '每个条目用标准 inflate 都能原样还原（云上解压器能读）', badRoundtrip.join('; '));
+check(
+  methods.every((m) => m === 8),
+  '全部条目使用 deflate（method=8），不是未压缩的 store',
+  '实际 method=' + methods.join(',')
+);
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.writeFileSync(OUT_ZIP, zip);
@@ -361,6 +561,26 @@ check(zip.length > 1024 && zip.length < 1024 * 1024, `产物大小合理（${kb}
 // ---------------------------------------------------------------- 汇总
 console.log('\n' + '─'.repeat(52));
 if (checkFail > 0) die(`自检未通过（失败 ${checkFail} 项），未生成 zip`);
+
+// 留一份指纹，供 `node build.mjs --check` 判定"本机 zip 是不是最新的"
+const dg = sourceDigest();
+fs.writeFileSync(
+  STAMP,
+  JSON.stringify(
+    {
+      version: readVersion(),
+      built_at: new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace(' ', ' '),
+      digest: dg.digest,
+      files: dg.files,
+      zip_sha256: sha256(zip),
+      zip_size: zip.length,
+      checks_passed: checkPass,
+    },
+    null,
+    2
+  ) + '\n'
+);
+console.log(`指纹已记录：${STAMP}`);
 
 console.log(`自检全部通过（${checkPass} 项）`);
 console.log(`\n产物：${OUT_ZIP}`);

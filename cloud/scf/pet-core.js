@@ -50,13 +50,24 @@ const num = (v, d) => {
   return Number.isFinite(n) ? n : d;
 };
 
-/** 合并环境变量成运行时配置 */
+/**
+ * 合并环境变量成运行时配置。
+ *
+ * 两种写法都认，`PET_` 前缀优先：
+ *   PET_INIT_COINS=50   （推荐，和 PET_KEY / PET_NAME 风格一致）
+ *   INIT_COINS=50       （兼容旧写法）
+ * 这样文档里写的变量名和实际生效的完全一致，不会出现「照文档配了却没动静」。
+ */
 function resolveConfig(env) {
   const src = env || {};
   const cfg = {};
   for (const k of Object.keys(DEFAULTS)) {
     const d = DEFAULTS[k];
-    cfg[k] = typeof d === 'number' ? num(src[k], d) : (src[k] === undefined ? d : src[k]);
+    let raw = src['PET_' + k];
+    if (raw === undefined) {
+      raw = src[k];
+    }
+    cfg[k] = typeof d === 'number' ? num(raw, d) : (raw === undefined ? d : raw);
   }
   cfg.TASK_NEEDS_PARENT_APPROVE = Number(cfg.TASK_NEEDS_PARENT_APPROVE) ? 1 : 0;
   return cfg;
@@ -151,6 +162,9 @@ function initDoc(cfg, ts) {
       starvingSince: 0,
       lastFeed: 0,
       lastActionAt: 0,
+      /* 家长看板指令的「已处理到哪一号」。存在设备 NVS 里、每次上报带回来，
+         所以它比云函数内存可靠——看板靠它判断指令有没有送达。 */
+      cmdAck: 0,
       createdAt: t,
       counters: { day: dayStartSec(t) },
     },
@@ -175,6 +189,7 @@ function normalizeDoc(doc, cfg, ts) {
   p.sick = p.sick ? 1 : 0;
   p.lastDecay = num(p.lastDecay, ts);
   p.starvingSince = num(p.starvingSince, 0);
+  p.cmdAck = Math.max(0, Math.round(num(p.cmdAck, 0)));
   p.counters = p.counters && typeof p.counters === 'object' ? p.counters : base.pet.counters;
   return {
     v: num(doc.v, 0),
