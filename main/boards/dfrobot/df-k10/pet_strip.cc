@@ -11,10 +11,14 @@ namespace {
 
 /* 40ms 一步 —— 和基类 Breathe 的手感一样，足够柔和又不闪 */
 constexpr int kMoodTickMs = 40;
-/* 单程 40 步 × 40ms = 1.6 秒，往返 3.2 秒一次完整呼吸 */
+/* 待机呼吸：单程 40 步 × 40ms = 1.6 秒，往返 3.2 秒 */
 constexpr int kMoodPhaseMax = 40;
-/* 呼吸最低亮度：目标色的 25%，不会彻底黑掉 */
+/* 待机呼吸最低亮度：目标色的 25%，不会彻底黑掉 */
 constexpr int kMoodLowPct = 25;
+/* 聆听脉动：单程 15 步 × 40ms = 0.6 秒，往返 1.2 秒，55%~100%
+ * 用节奏而不是换色来表达「我在听」，这样不会把心情色顶掉 */
+constexpr int kListenPhaseMax = 15;
+constexpr int kListenLowPct = 55;
 
 /* NVS 命名空间与键名 */
 constexpr const char* kNvsNamespace = "pet_mood";
@@ -37,23 +41,26 @@ inline StripColor ScalePct(const StripColor& c, int pct) {
 }
 
 /*
- * 哪些状态下心情灯说了算。
+ * 哪些状态由心情灯说了算。
  *
- * 只接管 Idle（以及启动早期的 Unknown）——也就是「不说话的时候」。
- * Connecting / Listening / Speaking 仍然走基类：
- *   聆听=偏红、说话=偏绿，这是小智原有的交互反馈，孩子听得懂。
- * 说完话回到 Idle，心情色立刻回来并一直亮着 —— 这正是要修的那个 bug。
+ * 关键教训：这台设备说完话是回到 kDeviceStateListening（连续对话模式），
+ * 不是回到 Idle。所以如果只在 Idle 接管，心情色几乎永远看不见 ——
+ * 用户看到的就是「说的时候是绿的，说完变红」。
  *
- * Starting / WifiConfiguring / Activating / Upgrading 是「过程态」，
- * 蓝色滚动/闪烁是给人看进度的，一律不抢。
+ * 因此改成「除了过程态，其余全接管」：
+ *   Starting / WifiConfiguring / Activating / Upgrading / FatalError
+ *   这些蓝色滚动、闪烁是给人看进度的，一律不抢。
  */
-bool MoodWinsOver(DeviceState state) {
+bool MoodTakesOver(DeviceState state) {
     switch (state) {
-        case kDeviceStateIdle:
-        case kDeviceStateUnknown:
-            return true;
-        default:
+        case kDeviceStateStarting:
+        case kDeviceStateWifiConfiguring:
+        case kDeviceStateActivating:
+        case kDeviceStateUpgrading:
+        case kDeviceStateFatalError:
             return false;
+        default:
+            return true;
     }
 }
 
@@ -97,6 +104,7 @@ void PetStrip::SetMood(uint8_t red, uint8_t green, uint8_t blue, int level, bool
         mood_raw_.blue = blue;
         mood_level_ = level;
         mood_breathe_ = breathe;
+        mood_suppressed_ = false; /* 重新点亮，解除「明确关灯」 */
 
         /* level 1-10 → 10%..100% */
         mood_color_ = ScalePct(mood_raw_, level * 10);
@@ -125,14 +133,16 @@ void PetStrip::ClearMood() {
     {
         std::lock_guard<std::mutex> lock(mood_mutex_);
         mood_active_ = false;
+        mood_suppressed_ = true; /* 明确关灯：之后所有状态都保持黑 */
         mood_breathe_ = false;
         mood_raw_ = {0, 0, 0};
         mood_color_ = {0, 0, 0};
-        mood_written_ = false;
         mood_last_ = {0, 0, 0};
+        mood_written_ = true;
         SetAllColor(mood_color_);
     }
 
+    /* 黑色不需要动画，定时器可以停；状态切换时由 OnStateChanged 继续压住 */
     if (mood_timer_ != nullptr) {
         esp_timer_stop(mood_timer_);
     }
@@ -167,6 +177,8 @@ void PetStrip::LoadSavedMood() {
     }
 
     if (level == 0 || (level > 0 && red == 0 && green == 0 && blue == 0)) {
+        /* 上次是「明确关灯」，这次开灯也要保持黑 */
+        mood_suppressed_ = true;
         ESP_LOGI(TAG, "PET_PATCH: mood saved as off, keep dark");
         return;
     }
@@ -211,8 +223,16 @@ void PetStrip::ApplyMoodLocked() {
 }
 
 /*
- * 每 40ms 一次。心情激活且在「心情说了算」的状态里，就把颜色写回去。
- * 目标色没变化就跳过，所以静态心情灯稳态下不会反复刷新 RMT。
+ * 每 40ms 一次。
+ *
+ * 颜色永远是心情色，设备状态改用「节奏」表达，这样既不丢反馈，
+ * 又不会把用户设的颜色顶掉：
+ *
+ *   Listening / AudioTesting → 快速脉动（单程 15 步 = 0.6s，往返 1.2s），55%~100%
+ *   Speaking / Notifying     → 恒定最亮
+ *   其它（Idle / Connecting）→ 按心情设定：breathe 则 3.2s 一个来回（25%~100%），否则恒定
+ *
+ * mood_suppressed_（用户说过关灯）时统一写黑。
  */
 void PetStrip::MoodTick(bool force) {
     if (!app_ready_) {
@@ -220,28 +240,55 @@ void PetStrip::MoodTick(bool force) {
     }
 
     std::lock_guard<std::mutex> lock(mood_mutex_);
-    if (!mood_active_) {
+    if (!mood_active_ && !mood_suppressed_) {
         return;
     }
 
     auto& app = Application::GetInstance();
     DeviceState state = app.GetDeviceState();
-    if (!MoodWinsOver(state)) {
+    if (!MoodTakesOver(state)) {
         mood_written_ = false; /* 交回基类；回到可接管状态时会重新写 */
         return;
     }
 
     StripColor target;
-    if (mood_breathe_) {
-        mood_phase_++;
-        if (mood_phase_ >= kMoodPhaseMax * 2) {
-            mood_phase_ = 0;
-        }
-        int step = mood_phase_ < kMoodPhaseMax ? mood_phase_ : (kMoodPhaseMax * 2 - mood_phase_);
-        int pct = kMoodLowPct + (100 - kMoodLowPct) * step / kMoodPhaseMax;
-        target = ScalePct(mood_color_, pct);
+
+    if (!mood_active_) {
+        /* 明确关灯：所有状态都保持黑 */
+        target = {0, 0, 0};
     } else {
-        target = mood_color_;
+        int period = 0;  /* 0 = 恒定，不呼吸 */
+        int low_pct = 100;
+
+        switch (state) {
+            case kDeviceStateListening:
+            case kDeviceStateAudioTesting:
+                period = kListenPhaseMax;
+                low_pct = kListenLowPct;
+                break;
+            case kDeviceStateSpeaking:
+            case kDeviceStateNotifying:
+                period = 0;
+                break;
+            default:
+                if (mood_breathe_) {
+                    period = kMoodPhaseMax;
+                    low_pct = kMoodLowPct;
+                }
+                break;
+        }
+
+        if (period == 0) {
+            target = mood_color_;
+        } else {
+            mood_phase_++;
+            if (mood_phase_ >= period * 2) {
+                mood_phase_ = 0;
+            }
+            int step = mood_phase_ < period ? mood_phase_ : (period * 2 - mood_phase_);
+            int pct = low_pct + (100 - low_pct) * step / period;
+            target = ScalePct(mood_color_, pct);
+        }
     }
 
     if (!force && mood_written_ && SameColor(target, mood_last_)) {
@@ -258,13 +305,13 @@ void PetStrip::OnStateChanged() {
 
     DeviceState state = Application::GetInstance().GetDeviceState();
 
-    if (mood_active_ && MoodWinsOver(state)) {
+    if ((mood_active_ || mood_suppressed_) && MoodTakesOver(state)) {
         /* 心情优先：不调 CircularStrip::OnStateChanged()，
          * 否则 Idle 会被 FadeOut 淡掉、Listening/Speaking 会被改成红/绿。 */
         MoodTick(true);
-        ESP_LOGI(TAG, "PET_PATCH: mood holds rgb(%u,%u,%u) in state %d",
-                 mood_color_.red, mood_color_.green, mood_color_.blue,
-                 static_cast<int>(state));
+        ESP_LOGI(TAG, "PET_PATCH: mood holds rgb(%u,%u,%u) in state %d%s",
+                 mood_last_.red, mood_last_.green, mood_last_.blue,
+                 static_cast<int>(state), mood_active_ ? "" : " (off)");
         return;
     }
 

@@ -15,19 +15,21 @@
  *   2. FadeOut() 和 Breathe() 共用同一个 strip_timer_，而且 FadeOut 是从 colors_[]
  *      开始淡出的 —— Breathe 从来不更新 colors_[]，所以「呼吸」一被 FadeOut 接管，
  *      淡出的起点是上一个状态的残留色，看起来就是「亮一下然后没了」。
- *   3. kDeviceStateListening / kDeviceStateSpeaking 会把灯改成红/绿，颜色名字跟
- *      心情色撞车，容易误判成「心情色被覆盖」。
+ *   3. Listening 会被改成红、Speaking 会被改成绿。而这台设备说完话是回到 Listening
+ *      （连续对话模式）而不是 Idle，所以心情色几乎永远看不见 —— 这是最坑的一条。
  *
  * 这里的做法是彻底不依赖基类的特效定时器：
  *
  *   - PetStrip 自己持有一个 40ms 的 esp_timer；
- *   - 只要心情是激活的，就在 Idle/Connecting/Listening/Speaking/Notifying 这些
- *     状态里持续把心情色写回去（呼吸效果也由这个定时器自己算，不调 Breathe）；
- *   - 开机 / 配网 / 联网激活 / 升级 这些过程态不抢占，留给基类显示进度；
- *   - 目标色没变化就不重复刷新，静态心情灯实际只写一次。
+ *   - 除「开机 / 配网 / 联网激活 / 升级 / 致命错误」这些过程态外，一律照着心情色写，
+ *     谁把它改掉都能在 40ms 内自愈；
+ *   - 设备状态改用「节奏」表达，不再换颜色：
+ *       待机   → 按心情设定呼吸（3.2 秒一个来回）或恒定
+ *       聆听   → 快速脉动（1.2 秒一个来回，55%~100%），像在专注听你说话
+ *       说话   → 恒定最亮
+ *   - clear_mood 之后进入「明确关灯」状态，所有状态下都保持黑，重启也保持黑。
  *
- * 另外把心情存进 NVS，重启后自动恢复 —— 既是宠物该有的行为，也方便验证
- * 「工具到底有没有被调用」。
+ * 另外把心情存进 NVS，重启后自动恢复。
  */
 class PetStrip : public CircularStrip {
 public:
@@ -40,6 +42,7 @@ public:
     void ClearMood();
 
     bool mood_active() const { return mood_active_; }
+    bool mood_suppressed() const { return mood_suppressed_; }
     const StripColor& mood_color() const { return mood_color_; }
     bool mood_breathe() const { return mood_breathe_; }
     int mood_level() const { return mood_level_; }
@@ -54,6 +57,8 @@ private:
     std::mutex mood_mutex_;
 
     bool mood_active_ = false;
+    /* clear_mood 之后为 true：所有状态都保持黑，重启也保持黑 */
+    bool mood_suppressed_ = false;
     bool mood_breathe_ = false;
     int mood_level_ = 5;
     StripColor mood_raw_ = {0, 0, 0};    /* 未按 level 压暗的原始色 */
