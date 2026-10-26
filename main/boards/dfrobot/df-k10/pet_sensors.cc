@@ -174,10 +174,35 @@ void PetSensors::InitLight() {
     uint8_t rate[2] = {0x85, 0x1B};
     Write(PET_LTR303_ADDR, rate, 2);
 
+#if PET_LIGHT_GAIN_SWEEP
+    /*
+     * 增益扫描：按 bit[4:2] 三位的编码依次试 1x/2x/4x/8x。
+     * 正常应该看到 CH0 大约按 1 → 2 → 4 → 8 倍递增。
+     * 如果某档不涨，说明这个编码非法被芯片丢弃；如果四档都是个位数，
+     * 说明房间真的没光（不是传感器坏了）。
+     */
+    static const uint8_t kSweepCodes[4] = {0x01, 0x05, 0x09, 0x0D};
+    static const char* const kSweepNames[4] = {"1x", "2x", "4x", "8x"};
+    for (int i = 0; i < 4; i++) {
+        uint8_t cmd[2] = {0x80, kSweepCodes[i]};
+        Write(PET_LTR303_ADDR, cmd, 2);
+        pet_delay_ms(480);  // 略大于 400ms 积分时间
+        uint8_t s[4] = {0};
+        uint16_t c0 = 0;
+        uint16_t c1 = 0;
+        if (ReadReg(PET_LTR303_ADDR, 0x88, s, sizeof(s)) == ESP_OK) {
+            c1 = static_cast<uint16_t>((s[1] << 8) | s[0]);
+            c0 = static_cast<uint16_t>((s[3] << 8) | s[2]);
+        }
+        ESP_LOGI(TAG, "LTR303 增益扫描 %s(0x%02X) → CH0=%u CH1=%u", kSweepNames[i],
+                 kSweepCodes[i], c0, c1);
+    }
+#endif
+
     // 0x80 ALS_CONTR：bit0 = active，bit[4:2] 是**三位**增益编码
     //   000=1x 001=2x 010=4x 011=8x 110=48x 111=96x（100/101 非法）
-    // ★ 踩过的坑：一开始按「两位、bit[4:3]」写成 0x11（=1001b），芯片把非法的
-    //   100 丢掉、只留 active 位，回读仍是 0x01，增益等于没设。4x 的正确编码是 010 → 0x09。
+    // ★ 踩过的坑：一开始按「两位、bit[4:3]」写成 0x11（=1001b），那段是 100 属于非法值，
+    //   芯片把增益位丢掉、只留 active 位，回读仍是 0x01，增益等于没设。4x 的正确编码是 010。
     uint8_t contr[2] = {0x80, 0x09};
     if (Write(PET_LTR303_ADDR, contr, 2) != ESP_OK) {
         ESP_LOGW(TAG, "LTR303 启动失败");
