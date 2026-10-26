@@ -57,6 +57,16 @@ public:
     virtual bool IsMonochrome() const { return false; }
     virtual bool SupportsGuiOperations() const { return false; }
     virtual void SetHideSubtitle(bool hide) { (void)hide; }
+
+    /* PET_PATCH_MARK: 宠物猫脸表情 —— 可选能力，默认不支持。
+     * 只有启用了猫脸的板子（目前是 K10）会 override。
+     * 放在基类是为了让板级代码能用 Display* 直接调，不必知道具体屏幕类型
+     * （本工程关了 RTTI，拿不到 dynamic_cast）。 */
+    virtual bool SetPetFace(const char* name) {
+        (void)name;
+        return false;
+    }
+    virtual const char* PetFaceList() { return ""; }
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {
         (void)name;
         (void)duration_ms;

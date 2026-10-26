@@ -22,6 +22,7 @@
  * 定义 PET_FACE_ENABLE=1（并加好 include 路径），其他板子完全不受影响。 */
 #ifdef PET_FACE_ENABLE
 #  include "pet_face.h"
+#  include "pet_face_view.h"
 #  define PET_FACE_AVAILABLE 1
 #endif
 
@@ -428,14 +429,11 @@ void LcdDisplay::SetupUI() {
      * container_ 是 LV_FLEX_FLOW_COLUMN 布局，普通子对象会被 flex 重新摆位，
      * 所以必须加 LV_OBJ_FLAG_IGNORE_LAYOUT，再 move_to_index(0) 压到最底，
      * 让状态栏、聊天文字仍然显示在猫脸之上。 */
-    pet_face_img_ = lv_img_create(container_);
-    lv_img_set_src(pet_face_img_, &pet_face_idle);
-    lv_obj_add_flag(pet_face_img_, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_remove_flag(pet_face_img_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_pos(pet_face_img_, 0, 0);
-    lv_obj_move_to_index(pet_face_img_, 0);
-    ESP_LOGI(TAG, "PET_PATCH: pet face enabled as background (%dx%d)", pet_face_idle.header.w,
-             pet_face_idle.header.h);
+    pet_face_view_ = new PetFaceView(container_);
+    lv_obj_add_flag(pet_face_view_->root(), LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_move_to_index(pet_face_view_->root(), 0);
+    pet_face_view_->Start();
+    ESP_LOGI(TAG, "PET_PATCH: pet face view attached (wechat style)");
 #endif
 
     /* Layer 1: Top bar - for status icons */
@@ -905,13 +903,10 @@ void LcdDisplay::SetupUI() {
     /* 宠物猫脸：普通样式分支（K10 走这条）。这里的 container_ 只是一层纯色背景，
      * 真正的 UI 都直接挂在 screen 上，所以猫脸也挂 screen，并压到 container_ 之上、
      * 其它 UI 之下（index 1）。 */
-    pet_face_img_ = lv_img_create(screen);
-    lv_img_set_src(pet_face_img_, &pet_face_idle);
-    lv_obj_remove_flag(pet_face_img_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_pos(pet_face_img_, 0, 0);
-    lv_obj_move_to_index(pet_face_img_, 1);
-    ESP_LOGI(TAG, "PET_PATCH: pet face enabled as background (%dx%d) [normal style]",
-             pet_face_idle.header.w, pet_face_idle.header.h);
+    pet_face_view_ = new PetFaceView(screen);
+    lv_obj_move_to_index(pet_face_view_->root(), 1);
+    pet_face_view_->Start();
+    ESP_LOGI(TAG, "PET_PATCH: pet face view attached (normal style)");
 #endif
 
     /* Bottom layer: emoji_box_ - centered display */
@@ -934,7 +929,7 @@ void LcdDisplay::SetupUI() {
 #ifdef PET_FACE_AVAILABLE
     /* 猫脸模式：emoji_box_ 里预置了一个机器人图标（MATERIAL_SYMBOLS_ROBOT_2），
      * 不隐藏的话会正好压在我们猫脸中间。 */
-    if (pet_face_img_ != nullptr) {
+    if (pet_face_view_ != nullptr) {
         lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
     }
 #endif
@@ -1172,6 +1167,28 @@ void LcdDisplay::ClearChatMessages() {
 }
 #endif
 
+bool LcdDisplay::SetPetFace(const char* name) {
+#ifdef PET_FACE_AVAILABLE
+    if (pet_face_view_ == nullptr) {
+        return false;
+    }
+    DisplayLockGuard lock(this);
+    return pet_face_view_->SetExpression(name);
+#else
+    (void)name;
+    return false;
+#endif
+}
+
+const char* LcdDisplay::PetFaceList() {
+#ifdef PET_FACE_AVAILABLE
+    if (pet_face_view_ != nullptr) {
+        return PetFaceView::NameList();
+    }
+#endif
+    return "";
+}
+
 void LcdDisplay::SetEmotion(const char* emotion) {
     if (!setup_ui_called_) {
         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",
@@ -1179,8 +1196,19 @@ void LcdDisplay::SetEmotion(const char* emotion) {
     }
 #ifdef PET_FACE_AVAILABLE
     /* 启用猫脸时不再叠加官方 emoji 贴图/字体表情：
-     * 猫脸是常驻底图，再叠一个圆形 emoji 会变成"两只脸"。 */
-    if (pet_face_img_ != nullptr) {
+     * 猫脸是常驻画面，再叠一个圆形 emoji 会变成"两只脸"。
+     *
+     * 注意系统的调用时机：回到 idle、开始聆听、连接建立时都会调
+     * SetEmotion("neutral") 做重置。如果照单全收，宠物自己的表情就永远留不住。
+     * 所以这里的规则是：
+     *   - neutral 及无法识别的名字一律忽略，保留宠物当前表情；
+     *   - happy / sad / sick / hungry 这些认得的，映射到猫脸表情，
+     *     这样模型在对话里带的情绪能立刻反映到脸上。 */
+    if (pet_face_view_ != nullptr) {
+        if (emotion != nullptr && PetFaceView::Parse(emotion) != PetFaceView::kNeutral) {
+            DisplayLockGuard lock(this);
+            pet_face_view_->SetExpression(emotion);
+        }
         return;
     }
 #endif

@@ -1,5 +1,6 @@
 #include "pet_tools.h"
 #include "pet_config.h"
+#include "pet_face_view.h"
 #include "mcp_server.h"
 #include "display/lvgl_display/lvgl_theme.h"
 
@@ -172,6 +173,15 @@ std::shared_ptr<EmojiCollection> PetTools::EmojiTable() {
 }
 
 bool PetTools::FaceExists(const std::string& face) {
+    /* 猫脸模式优先：这台板子用的是矢量猫脸，表情名由 PetFaceView 定义，
+     * 跟官方 emoji 资源表无关。 */
+    if (display_ != nullptr) {
+        const char* pet_list = display_->PetFaceList();
+        if (pet_list != nullptr && pet_list[0] != '\0') {
+            return PetFaceView::Known(face.c_str());
+        }
+    }
+
     auto table = EmojiTable();
     if (table == nullptr) {
         // 表情资源还没加载（开机早期），不做判断，交给 SetEmotion 自己报
@@ -193,6 +203,13 @@ bool PetTools::FaceExists(const std::string& face) {
 }
 
 std::string PetTools::FaceNameList() {
+    if (display_ != nullptr) {
+        const char* pet_list = display_->PetFaceList();
+        if (pet_list != nullptr && pet_list[0] != '\0') {
+            return std::string(pet_list);
+        }
+    }
+
     auto table = EmojiTable();
     if (table == nullptr) {
         return "(表情资源未就绪)";
@@ -222,9 +239,9 @@ void PetTools::RegisterFaceTools() {
 
     mcp_server.AddTool(
         "self.pet.set_face",
-        "切换宠物屏幕上的表情，让宠物看起来开心/难过/惊讶等。"
-        "先用 self.pet.list_faces 查这台设备支持哪些表情名，再调用本工具。"
-        "注意：对话进行中屏幕被对话界面占用，表情主要在对话结束后的空闲画面可见。",
+        "切换宠物脸上的表情。表情会一直保持（眼睛会自己眨），直到下次修改。"
+        "主动用表情表达情绪：孩子讲开心的事就设 happy，你自己饿了就设 hungry。"
+        "先用 self.pet.list_faces 查可用名字。",
         PropertyList({
             Property("face", kPropertyTypeString, std::string("neutral")),
         }),
@@ -233,10 +250,10 @@ void PetTools::RegisterFaceTools() {
             if (!FaceExists(face)) {
                 return std::unexpected("这台设备没有这个表情：" + face + "。可用：" + FaceNameList());
             }
-            face_ = face;
-            if (display_ != nullptr) {
-                display_->SetEmotion(face.c_str());
+            if (display_ == nullptr || !display_->SetPetFace(face.c_str())) {
+                return std::unexpected(std::string("切换表情失败，屏幕可能还没就绪：") + face);
             }
+            face_ = face;
             return std::string("表情已切换为 ") + face;
         });
 

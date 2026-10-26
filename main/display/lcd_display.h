@@ -11,6 +11,13 @@
 
 #define PREVIEW_IMAGE_DURATION_MS 5000
 
+/* PET_PATCH_MARK: 宠物猫脸（矢量绘制，可眨眼/换表情）。
+ * 由 CMakeLists.txt 在板级目录存在 pet_face.h 时定义 PET_FACE_ENABLE=1，
+ * 其他板子完全不受影响。 */
+#ifdef PET_FACE_ENABLE
+class PetFaceView;
+#endif
+
 class LcdDisplay : public LvglDisplay {
 protected:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -29,9 +36,11 @@ protected:
     std::unique_ptr<LvglGif> gif_controller_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
-    /* PET_PATCH_MARK: 宠物猫脸常驻底图。非空表示本次构建启用了自定义猫脸，
+    /* PET_PATCH_MARK: 宠物猫脸。非空表示本次构建启用了自定义猫脸，
      * 此时官方 emoji 贴图不再显示（SetEmotion 直接跳过），屏幕上只有猫脸。 */
-    lv_obj_t* pet_face_img_ = nullptr;
+#ifdef PET_FACE_ENABLE
+    PetFaceView* pet_face_view_ = nullptr;
+#endif
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
     bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
@@ -57,6 +66,13 @@ public:
 
     // Set whether to hide chat messages/subtitles
     virtual void SetHideSubtitle(bool hide) override;
+
+    /* PET_PATCH_MARK: 切换猫脸表情。name 支持英文名和中文别名
+     * （neutral/happy/sad/sick/hungry、开心/难过/生病/饿了）。
+     * 返回 false 表示这个表情不存在或本构建未启用猫脸。 */
+    bool SetPetFace(const char* name) override;
+    /* 返回可用表情清单，给 AI 工具用 */
+    const char* PetFaceList() override;
 };
 
 // SPI LCD display
