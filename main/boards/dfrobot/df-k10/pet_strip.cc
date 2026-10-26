@@ -211,11 +211,11 @@ void PetStrip::ApplyMoodLocked() {
         return;
     }
 
-    /* 呼吸的第一帧从最低亮度起步，免得一亮就从最亮开始 */
-    StripColor first = mood_breathe_ ? ScalePct(mood_color_, kMoodLowPct) : mood_color_;
-    SetAllColor(first);
-    mood_last_ = first;
+    /* 第一帧直接给满亮，然后在之后的 tick 里平滑降下去 —— 避免「一亮就暗」的突兀感 */
+    SetAllColor(mood_color_);
+    mood_last_ = mood_color_;
     mood_written_ = true;
+    mood_last_state_ = kDeviceStateUnknown; /* 强制下一次 tick 把相位归零 */
 
     if (mood_timer_ != nullptr && !esp_timer_is_active(mood_timer_)) {
         esp_timer_start_periodic(mood_timer_, kMoodTickMs * 1000);
@@ -228,9 +228,13 @@ void PetStrip::ApplyMoodLocked() {
  * 颜色永远是心情色，设备状态改用「节奏」表达，这样既不丢反馈，
  * 又不会把用户设的颜色顶掉：
  *
- *   Listening / AudioTesting → 快速脉动（单程 15 步 = 0.6s，往返 1.2s），55%~100%
+ *   Listening / AudioTesting → 脉动（单程 15 步 = 0.6s，往返 1.2s），55%~100%
  *   Speaking / Notifying     → 恒定最亮
  *   其它（Idle / Connecting）→ 按心情设定：breathe 则 3.2s 一个来回（25%~100%），否则恒定
+ *
+ * 波形一律「从 100% 往下走再回来」，并且状态一变就把相位归零。
+ * 这样从说话（100%）切到聆听时是平滑降亮，不会突然掉到 55%
+ * —— 那种突降看起来就像「说完灭了一下」。
  *
  * mood_suppressed_（用户说过关灯）时统一写黑。
  */
@@ -249,6 +253,12 @@ void PetStrip::MoodTick(bool force) {
     if (!MoodTakesOver(state)) {
         mood_written_ = false; /* 交回基类；回到可接管状态时会重新写 */
         return;
+    }
+
+    /* 状态切换：呼吸相位归零，保证从最亮开始，衔接上一状态的满亮 */
+    if (state != mood_last_state_) {
+        mood_last_state_ = state;
+        mood_phase_ = 0;
     }
 
     StripColor target;
@@ -286,7 +296,8 @@ void PetStrip::MoodTick(bool force) {
                 mood_phase_ = 0;
             }
             int step = mood_phase_ < period ? mood_phase_ : (period * 2 - mood_phase_);
-            int pct = low_pct + (100 - low_pct) * step / period;
+            /* 相位 0 = 100% 最亮，相位 period = 最暗 */
+            int pct = 100 - (100 - low_pct) * step / period;
             target = ScalePct(mood_color_, pct);
         }
     }

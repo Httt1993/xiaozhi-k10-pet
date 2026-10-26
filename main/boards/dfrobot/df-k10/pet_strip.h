@@ -6,6 +6,8 @@
 #include <esp_timer.h>
 #include <mutex>
 
+#include "device_state.h"
+
 /*
  * PetStrip —— 让宠物心情灯「一直亮着」。
  *
@@ -68,6 +70,9 @@ private:
     int mood_phase_ = 0;
     StripColor mood_last_ = {0, 0, 0};
     bool mood_written_ = false;
+    /* 记录上一次生效的状态：状态一变就把呼吸相位归零，
+     * 保证新状态总是从 100% 亮度起步，不会突然掉亮（那样很像「闪一下灭了」） */
+    DeviceState mood_last_state_ = kDeviceStateUnknown;
 
     /* 开机阶段禁止触碰 Application 单例（Board 是在 Application 构造里建的） */
     bool app_ready_ = false;
