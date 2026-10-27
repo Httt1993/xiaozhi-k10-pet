@@ -81,6 +81,9 @@ public:
     /** 任务清单的人话版，直接给模型 */
     std::string TaskListText(bool include_done = false);
 
+    /** 任务清单的 JSON 数组字符串（家长看板用），如 [{"title":"写作业","reward":10,"status":"pending"},...] */
+    std::string GetTasksJson(bool include_done = false);
+
     /**
      * 启动后台心跳：每 interval_sec 秒静默 sync 一次，把家长看板排队的指令取回来。
      *
