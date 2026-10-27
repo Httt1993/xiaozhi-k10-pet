@@ -1,6 +1,7 @@
 #include "pet_config.h"
 #include "sd_probe.h"
 
+/* PET_SD_PROBE=0 时编译空 stub，跳过 210 轮引脚扫描 */
 #if PET_SD_PROBE
 
 #include <cstdio>
