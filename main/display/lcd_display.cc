@@ -1189,6 +1189,18 @@ const char* LcdDisplay::PetFaceList() {
     return "";
 }
 
+void LcdDisplay::SetPetStats(int hunger, int mood, int energy, int coins) {
+#ifdef PET_FACE_AVAILABLE
+    if (pet_face_view_ == nullptr) {
+        return;
+    }
+    DisplayLockGuard lock(this);
+    pet_face_view_->SetStats(hunger, mood, energy, coins);
+#else
+    (void)hunger; (void)mood; (void)energy; (void)coins;
+#endif
+}
+
 void LcdDisplay::SetEmotion(const char* emotion) {
     if (!setup_ui_called_) {
         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",
