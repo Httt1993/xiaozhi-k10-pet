@@ -1078,8 +1078,12 @@ bool Run(const char* state_json, const char* action, const char* args_json,
             cJSON_AddItemToArray(meds, m);
         }
         // ping 不走 pack，但仍输出规范化 state 供调用方落盘
-        out_state_json = cJSON_PrintUnformatted(doc);
-        out_response_json = cJSON_PrintUnformatted(r);
+        {
+            char* tmp1 = cJSON_PrintUnformatted(doc);
+            if (tmp1) { out_state_json = tmp1; cJSON_free(tmp1); }
+            char* tmp2 = cJSON_PrintUnformatted(r);
+            if (tmp2) { out_response_json = tmp2; cJSON_free(tmp2); }
+        }
         cJSON_Delete(r);
         cJSON_Delete(doc);
         cJSON_Delete(args);
@@ -1155,8 +1159,12 @@ bool Run(const char* state_json, const char* action, const char* args_json,
     cJSON_AddBoolToObject(res, "fresh", fresh);
     Pack(doc, cfg, ts, serverTs, skew, res);
 
-    out_response_json = cJSON_PrintUnformatted(res);
-    out_state_json = cJSON_PrintUnformatted(doc);
+    {
+        char* tmp1 = cJSON_PrintUnformatted(res);
+        if (tmp1) { out_response_json = tmp1; cJSON_free(tmp1); }
+        char* tmp2 = cJSON_PrintUnformatted(doc);
+        if (tmp2) { out_state_json = tmp2; cJSON_free(tmp2); }
+    }
     cJSON_Delete(res);
     cJSON_Delete(doc);
     cJSON_Delete(args);
@@ -1173,7 +1181,10 @@ bool GetStatusJson(const char* state_json, int64_t ts, std::string& out_status_j
     }
     NormalizeDocInPlace(doc, cfg, ts);
     cJSON* st = GetStatus(doc, cfg, ts);
-    out_status_json = cJSON_PrintUnformatted(st);
+    {
+        char* tmp = cJSON_PrintUnformatted(st);
+        if (tmp) { out_status_json = tmp; cJSON_free(tmp); }
+    }
     cJSON_Delete(st);
     cJSON_Delete(doc);
     return true;
