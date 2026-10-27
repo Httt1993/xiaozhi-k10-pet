@@ -13,6 +13,7 @@
 #include "pet_tools.h"
 #include "pet_config.h"
 #include "pet_motion.h"
+#include "pet_http.h"     // PET_PATCH: 家长看板 HTTP 服务
 #include "sd_probe.h"
 #include "assets/lang_config.h"
 
@@ -272,6 +273,8 @@ private:
         // PET_PATCH: 启动 50Hz 体感引擎（复用 PetTools 已探测好的加速度计）。
         // 无加速度时内部自动停摆，不影响开机。
         PetMotionInit(&pet_tools_->sensors());
+        // PET_PATCH: 启动家长看板 HTTP 服务（WiFi 起来后手机浏览器连 k10-pet.local）
+        PetHttpStart(&pet_tools_->cloud(), "1234");
     }
 
 public:
