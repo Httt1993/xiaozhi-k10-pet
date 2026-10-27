@@ -69,6 +69,9 @@ public:
     /* 手动投放 FX */
     void SpawnFx(PetFxKind kind, int x, int y);
 
+    /* 更新底部属性栏（饱食/心情/精力/金币），值 0~100（coins 不限） */
+    void SetStats(int hunger, int mood, int energy, int coins);
+
     void Start();  /* 启动眨眼 / 呼吸 / 体感定时器 */
     void Stop();
 
@@ -125,6 +128,10 @@ private:
     lv_obj_t* tongue_ = nullptr;
     /* 腮红叠层（呼吸透明度 + 情绪加深） */
     lv_obj_t* blush_[2] = {nullptr, nullptr};
+
+    /* 底部属性栏：饱食/心情/精力/金币 */
+    lv_obj_t* stats_bar_ = nullptr;
+    lv_obj_t* stat_labels_[4] = {nullptr, nullptr, nullptr, nullptr};
 
     lv_timer_t* timer_ = nullptr;
 
