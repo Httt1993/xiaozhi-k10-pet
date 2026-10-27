@@ -117,6 +117,6 @@
  *
  * 注意：探测必须在屏幕/摄像头初始化之前跑，否则 SPI 总线抢不到。
  */
-#define PET_SD_PROBE 1
+#define PET_SD_PROBE 0
 
 #endif  // _PET_CONFIG_H_
