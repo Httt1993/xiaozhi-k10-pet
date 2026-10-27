@@ -287,17 +287,35 @@ void Application::Run() {
 }
 
 void Application::HandleNetworkConnectedEvent() {
-    ESP_LOGI(TAG, "Network connected");
+    ESP_LOGI(TAG, "Network connected, state=%s",
+             DeviceStateMachine::GetStateName(GetDeviceState()));
     auto state = GetDeviceState();
 
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring) {
         // Network is ready, start activation
         SetDeviceState(kDeviceStateActivating);
-        if (activation_task_handle_ != nullptr) {
-            ESP_LOGW(TAG, "Activation task already running");
-            return;
-        }
+    } else if (state == kDeviceStateActivating && activation_task_handle_ == nullptr) {
+        // State already Activating but task died — restart it
+        ESP_LOGW(TAG, "Activation task missing, restarting");
+    } else if (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
+               state == kDeviceStateNotifying) {
+        // Active conversation — don't interrupt, just update the status bar
+        auto display = Board::GetInstance().GetDisplay();
+        display->UpdateStatusBar(true);
+        return;
+    } else if (state != kDeviceStateActivating) {
+        // Unexpected state (e.g. stuck in AudioTesting) — force transition
+        ESP_LOGW(TAG, "Unexpected state %s on network connect, forcing Activating",
+                 DeviceStateMachine::GetStateName(state));
+        SetDeviceState(kDeviceStateActivating);
+    }
 
+    // Always clear the WiFi config mode status text so the screen doesn't
+    // stay stuck on "配网模式" after the network is actually connected.
+    auto display = Board::GetInstance().GetDisplay();
+    display->SetStatus(Lang::Strings::ACTIVATION);
+
+    if (activation_task_handle_ == nullptr) {
         xTaskCreate(
             [](void* arg) {
                 Application* app = static_cast<Application*>(arg);
@@ -306,10 +324,11 @@ void Application::HandleNetworkConnectedEvent() {
                 vTaskDelete(NULL);
             },
             "activation", 4096 * 2, this, 2, &activation_task_handle_);
+    } else {
+        ESP_LOGW(TAG, "Activation task already running");
     }
 
     // Update the status bar immediately to show the network state
-    auto display = Board::GetInstance().GetDisplay();
     display->UpdateStatusBar(true);
 }
 
@@ -1057,6 +1076,12 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::SPEAKING);
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+            break;
+        case kDeviceStateActivating:
+            // Clear "配网模式" status; show activation progress instead of
+            // leaving the stale WiFi-config text on screen.
+            display->SetStatus(Lang::Strings::ACTIVATION);
+            display->SetEmotion("neutral");
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
