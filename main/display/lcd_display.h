@@ -73,6 +73,8 @@ public:
     bool SetPetFace(const char* name) override;
     /* 返回可用表情清单，给 AI 工具用 */
     const char* PetFaceList() override;
+    /* PET_PATCH: 更新底部属性栏 */
+    void SetPetStats(int hunger, int mood, int energy, int coins) override;
 };
 
 // SPI LCD display
