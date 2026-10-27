@@ -67,6 +67,10 @@ public:
         return false;
     }
     virtual const char* PetFaceList() { return ""; }
+    /* PET_PATCH: 更新底部属性栏（饱食/心情/精力/金币） */
+    virtual void SetPetStats(int hunger, int mood, int energy, int coins) {
+        (void)hunger; (void)mood; (void)energy; (void)coins;
+    }
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {
         (void)name;
         (void)duration_ms;
