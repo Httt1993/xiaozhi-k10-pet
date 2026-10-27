@@ -2,13 +2,16 @@
 #include "pet_engine.h"
 
 #include <cJSON.h>
-#include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_timer.h>
 #include <mdns.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+
+/* 原生 BSD socket（不走 esp_http_server，避开 ctrl socket 资源冲突） */
+#include <lwip/sockets.h>
+#include <lwip/netdb.h>
 
 #include <cstring>
 #include <ctime>
@@ -20,17 +23,20 @@
 namespace {
 
 /* ───────── 配置 ───────── */
-constexpr int kPort = 8080;  /* 80 被小智 OTA/WebSocket 占了（EADDRINUSE），改 8080 */
+constexpr int kPort = 8080;
 constexpr int kMaxPinLen = 16;
 constexpr int kSeqCacheSize = 32;
-constexpr int kMaxRequestBody = 1024;
+constexpr int kMaxRequestBody = 2048;
+constexpr int kMaxRequestLine = 512;
+constexpr int kBacklog = 4;
 
 /* ───────── 状态 ───────── */
 PetCloud* g_cloud = nullptr;
-httpd_handle_t g_server = nullptr;
+int g_listen_fd = -1;
+volatile bool g_running = false;
 char g_pin[kMaxPinLen + 1] = {0};
 
-/* seq 幂等缓存：{seq → response} */
+/* seq 幂等缓存 */
 struct SeqEntry {
     int64_t seq = -1;
     std::string response;
@@ -45,41 +51,57 @@ int64_t NowSec() {
     return (t > 1600000000) ? static_cast<int64_t>(t) : 0;
 }
 
-/** 从请求里取 PIN：优先 x-pin 头，其次 ?pin= */
-bool CheckPin(httpd_req_t* req) {
-    if (g_pin[0] == '\0') {
-        return true;  /* 未设 PIN = 免认证 */
-    }
-    char buf[kMaxPinLen + 1] = {0};
-    if (httpd_req_get_hdr_value_str(req, "x-pin", buf, sizeof(buf)) == ESP_OK) {
-        return strcmp(buf, g_pin) == 0;
-    }
-    /* 查询参数 */
-    size_t qlen = httpd_req_get_url_query_len(req);
-    if (qlen > 0 && qlen < 128) {
-        char q[128] = {0};
-        if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
-            char pin_q[kMaxPinLen + 1] = {0};
-            if (httpd_query_key_value(q, "pin", pin_q, sizeof(pin_q)) == ESP_OK) {
-                return strcmp(pin_q, g_pin) == 0;
-            }
+/* 简易 HTTP 响应发送 */
+void SendHttpResponse(int fd, int status, const char* content_type,
+                      const std::string& body) {
+    const char* status_text =
+        status == 200 ? "OK" :
+        status == 401 ? "Unauthorized" :
+        status == 403 ? "Forbidden" :
+        status == 400 ? "Bad Request" :
+        status == 404 ? "Not Found" : "Internal Server Error";
+    char header[256];
+    int hlen = snprintf(header, sizeof(header),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %d\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Connection: close\r\n\r\n",
+        status, status_text, content_type, (int)body.size());
+    send(fd, header, hlen, 0);
+    send(fd, body.c_str(), body.size(), 0);
+}
+
+void SendJson(int fd, int status, const std::string& body) {
+    SendHttpResponse(fd, status, "application/json; charset=utf-8", body);
+}
+
+/* PIN 校验 */
+bool CheckPinFromHeaders(const std::string& headers) {
+    if (g_pin[0] == '\0') return true;
+    /* x-pin header */
+    size_t pos = headers.find("x-pin:");
+    if (pos == std::string::npos) pos = headers.find("X-Pin:");
+    if (pos != std::string::npos) {
+        size_t start = headers.find_first_not_of(" \t", pos + 6);
+        size_t end = headers.find("\r\n", start);
+        if (start != std::string::npos) {
+            std::string val = headers.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (val == g_pin) return true;
         }
+    }
+    /* ?pin= query */
+    pos = headers.find("pin=");
+    if (pos != std::string::npos) {
+        size_t start = pos + 4;
+        size_t end = headers.find_first_of(" &\r\n", start);
+        std::string val = headers.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (val == g_pin) return true;
     }
     return false;
 }
 
-/** 发 JSON 响应 */
-void SendJson(httpd_req_t* req, int status, const std::string& body) {
-    httpd_resp_set_type(req, "application/json; charset=utf-8");
-    httpd_resp_set_status(req, status == 200 ? "200 OK" :
-                                 status == 401 ? "401 Unauthorized" :
-                                 status == 403 ? "403 Forbidden" :
-                                 status == 400 ? "400 Bad Request" : "500 Internal Server Error");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_send(req, body.c_str(), body.size());
-}
-
-/** 家长指令白名单 */
+/* 家长指令白名单 */
 bool IsAllowedAction(const char* action) {
     static const char* kAllowed[] = {
         "sync", "feed", "play", "heal", "medicine", "sleep",
@@ -182,7 +204,7 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 </div>
 <div id="task-list"><div style="color:#b09070;text-align:center;padding:12px">暂无任务</div></div>
 </div>
-<div class="status-bar" id="status-bar">k10-pet.local · 本地直连</div>
+<div class="status-bar" id="status-bar">k10-pet.local:8080 · 本地直连</div>
 </div>
 <script>
 let PIN=localStorage.getItem('pet_pin')||'';
@@ -227,17 +249,78 @@ cmd('task_publish',{title,reward:parseInt(r)||10})}
 </body>
 </html>)rawliteral";
 
-/* ───────── 路由处理 ───────── */
+/* ───────── 请求处理 ───────── */
 
-/* GET / → 看板 HTML */
-esp_err_t HandleDashboard(httpd_req_t* req) {
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_send(req, kDashboardHtml, sizeof(kDashboardHtml) - 1);
-    return ESP_OK;
+struct HttpRequest {
+    std::string method;
+    std::string uri;
+    std::string headers;
+    std::string body;
+};
+
+/* 从 socket 读一个完整 HTTP 请求 */
+bool ReadHttpRequest(int fd, HttpRequest& req) {
+    char buf[2048];
+    int total = 0;
+    std::string raw;
+
+    /* 读到 \r\n\r\n 为止（headers 结束） */
+    while (total < (int)sizeof(buf) - 1) {
+        int n = recv(fd, buf + total, sizeof(buf) - 1 - total, 0);
+        if (n <= 0) return false;
+        total += n;
+        buf[total] = '\0';
+        if (strstr(buf, "\r\n\r\n")) break;
+    }
+    raw.assign(buf, total);
+
+    /* 解析请求行: METHOD URI HTTP/1.x */
+    size_t line_end = raw.find("\r\n");
+    if (line_end == std::string::npos) return false;
+    std::string request_line = raw.substr(0, line_end);
+    size_t sp1 = request_line.find(' ');
+    size_t sp2 = request_line.find(' ', sp1 + 1);
+    if (sp1 == std::string::npos || sp2 == std::string::npos) return false;
+    req.method = request_line.substr(0, sp1);
+    req.uri = request_line.substr(sp1 + 1, sp2 - sp1 - 1);
+
+    /* headers = 从第一行之后到 \r\n\r\n */
+    size_t hdr_start = line_end + 2;
+    size_t hdr_end = raw.find("\r\n\r\n", hdr_start);
+    if (hdr_end == std::string::npos) return false;
+    req.headers = raw.substr(hdr_start, hdr_end - hdr_start);
+
+    /* body（Content-Length） */
+    size_t body_start = hdr_end + 4;
+    int content_length = 0;
+    size_t cl_pos = req.headers.find("Content-Length:");
+    if (cl_pos == std::string::npos) cl_pos = req.headers.find("content-length:");
+    if (cl_pos != std::string::npos) {
+        content_length = atoi(req.headers.c_str() + cl_pos + 15);
+    }
+    if (content_length > 0 && content_length <= kMaxRequestBody) {
+        req.body = raw.substr(body_start);
+        /* 可能还没读完 body */
+        while ((int)req.body.size() < content_length) {
+            int n = recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            req.body.append(buf, n);
+        }
+        if ((int)req.body.size() > content_length) {
+            req.body.resize(content_length);
+        }
+    }
+    return true;
 }
 
-/* GET /api/info → 设备信息（免 PIN） */
-esp_err_t HandleInfo(httpd_req_t* req) {
+/* 处理 GET / → 看板 HTML */
+void HandleDashboard(int fd) {
+    SendHttpResponse(fd, 200, "text/html; charset=utf-8",
+                     std::string(kDashboardHtml, sizeof(kDashboardHtml) - 1));
+}
+
+/* GET /api/info */
+void HandleInfo(int fd) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "device", "K10 Pet");
     cJSON_AddStringToObject(root, "model", "df-k10");
@@ -248,22 +331,20 @@ esp_err_t HandleInfo(httpd_req_t* req) {
     std::string body = text ? text : "{}";
     if (text) cJSON_free(text);
     cJSON_Delete(root);
-    SendJson(req, 200, body);
-    return ESP_OK;
+    SendJson(fd, 200, body);
 }
 
-/* GET /api/state → 宠物状态（PIN） */
-esp_err_t HandleState(httpd_req_t* req) {
-    if (!CheckPin(req)) {
-        SendJson(req, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
-        return ESP_OK;
+/* GET /api/state */
+void HandleState(int fd, const std::string& headers) {
+    if (!CheckPinFromHeaders(headers)) {
+        SendJson(fd, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
+        return;
     }
     if (!g_cloud) {
-        SendJson(req, 500, "{\"ok\":false,\"code\":\"NOT_READY\"}");
-        return ESP_OK;
+        SendJson(fd, 500, "{\"ok\":false,\"code\":\"NOT_READY\"}");
+        return;
     }
 
-    /* 走 pet_engine sync：衰减 + 状态快照，不改变任何东西 */
     PetStatus st = g_cloud->GetStatus();
 
     cJSON* root = cJSON_CreateObject();
@@ -301,39 +382,28 @@ esp_err_t HandleState(httpd_req_t* req) {
     std::string body = text ? text : "{}";
     if (text) cJSON_free(text);
     cJSON_Delete(root);
-    SendJson(req, 200, body);
-    return ESP_OK;
+    SendJson(fd, 200, body);
 }
 
-/* POST /api/cmd → 执行动作（PIN + seq 幂等） */
-esp_err_t HandleCmd(httpd_req_t* req) {
-    if (!CheckPin(req)) {
-        SendJson(req, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
-        return ESP_OK;
+/* POST /api/cmd */
+void HandleCmd(int fd, const std::string& headers, const std::string& body) {
+    if (!CheckPinFromHeaders(headers)) {
+        SendJson(fd, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
+        return;
     }
     if (!g_cloud) {
-        SendJson(req, 500, "{\"ok\":false,\"code\":\"NOT_READY\"}");
-        return ESP_OK;
+        SendJson(fd, 500, "{\"ok\":false,\"code\":\"NOT_READY\"}");
+        return;
+    }
+    if (body.empty() || body.size() > kMaxRequestBody) {
+        SendJson(fd, 400, "{\"ok\":false,\"code\":\"BAD_REQUEST\"}");
+        return;
     }
 
-    /* 读 body */
-    if (req->content_len <= 0 || req->content_len > kMaxRequestBody) {
-        SendJson(req, 400, "{\"ok\":false,\"code\":\"BAD_REQUEST\"}");
-        return ESP_OK;
-    }
-    std::string body(req->content_len, 0);
-    int received = httpd_req_recv(req, &body[0], req->content_len);
-    if (received <= 0) {
-        SendJson(req, 400, "{\"ok\":false,\"code\":\"RECV_FAIL\"}");
-        return ESP_OK;
-    }
-    body.resize(received);
-
-    /* 解析 JSON */
     cJSON* root = cJSON_Parse(body.c_str());
     if (!root) {
-        SendJson(req, 400, "{\"ok\":false,\"code\":\"BAD_JSON\"}");
-        return ESP_OK;
+        SendJson(fd, 400, "{\"ok\":false,\"code\":\"BAD_JSON\"}");
+        return;
     }
 
     const char* action = cJSON_GetObjectItem(root, "action")
@@ -343,17 +413,17 @@ esp_err_t HandleCmd(httpd_req_t* req) {
 
     if (!action || !IsAllowedAction(action)) {
         cJSON_Delete(root);
-        SendJson(req, 403, "{\"ok\":false,\"code\":\"ACTION_BLOCKED\"}");
-        return ESP_OK;
+        SendJson(fd, 403, "{\"ok\":false,\"code\":\"ACTION_BLOCKED\"}");
+        return;
     }
 
-    /* seq 幂等：命中缓存直接返回上次结果 */
+    /* seq 幂等 */
     if (seq > 0) {
         for (auto& e : g_seq_cache) {
             if (e.seq == seq) {
                 cJSON_Delete(root);
-                SendJson(req, 200, e.response);
-                return ESP_OK;
+                SendJson(fd, 200, e.response);
+                return;
             }
         }
     }
@@ -370,7 +440,7 @@ esp_err_t HandleCmd(httpd_req_t* req) {
     }
     cJSON_Delete(root);
 
-    /* 调 pet_cloud → pet_engine */
+    /* 调 pet_engine */
     PetActionResult result = g_cloud->Act(action, args_json);
 
     /* 构建响应 */
@@ -397,21 +467,15 @@ esp_err_t HandleCmd(httpd_req_t* req) {
         g_seq_idx = (g_seq_idx + 1) % kSeqCacheSize;
     }
 
-    SendJson(req, 200, response);
+    SendJson(fd, 200, response);
     ESP_LOGI(TAG, "cmd=%s seq=%lld ok=%d code=%s", action, (long long)seq,
              result.ok ? 1 : 0, result.code.c_str());
-    return ESP_OK;
 }
 
-}  // namespace
+/* ───────── HTTP 服务主循环 ───────── */
 
-/* ───────── 对外接口 ───────── */
-
-/* 延迟启动任务：等 TCP/IP 栈就绪后再起 mDNS + httpd。
- * 直接在 InitializeIot() 里起会因 lwIP 尚未启动而 assert 崩溃
- * （tcpip_send_msg_wait_sem Invalid mbox）。 */
 static void PetHttpTask(void* arg) {
-    /* 等待 WiFi/TCP-IP 就绪：轮询 netif 是否有 IP，最多等 60 秒 */
+    /* 等 WiFi 拿到 IP（最多 60 秒） */
     for (int i = 0; i < 300; i++) {
         esp_netif_ip_info_t ip;
         esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -420,13 +484,10 @@ static void PetHttpTask(void* arg) {
         }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+    /* 额外等 2 秒让 lwIP 完全稳定 */
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
-    /* 额外再等 500ms 让 lwIP 完全稳定 */
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    PetCloud* cloud = (PetCloud*)arg;
-
-    /* 启动 mDNS */
+    /* mDNS */
     esp_err_t err = mdns_init();
     if (err == ESP_OK) {
         mdns_hostname_set("k10-pet");
@@ -434,49 +495,85 @@ static void PetHttpTask(void* arg) {
         mdns_service_add("K10-Pet-HTTP", "_http", "_tcp", kPort, nullptr, 0);
         ESP_LOGI(TAG, "mDNS: k10-pet.local");
     } else {
-        ESP_LOGW(TAG, "mdns_init failed: %s (HTTP 仍会启动，只是没有 .local 域名)", esp_err_to_name(err));
+        ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
     }
 
-    /* 启动 HTTP server */
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.server_port = kPort;
-    config.max_uri_handlers = 8;
-    config.stack_size = 8192;
-    config.lru_purge_enable = true;
+    /* 创建监听 socket */
+    int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listen_fd < 0) {
+        ESP_LOGE(TAG, "socket() failed: errno=%d", errno);
+        vTaskDelete(nullptr);
+        return;
+    }
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    err = httpd_start(&g_server, &config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
-        g_server = nullptr;
+    struct sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(kPort);
+
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        ESP_LOGE(TAG, "bind(%d) failed: errno=%d", kPort, errno);
+        close(listen_fd);
+        vTaskDelete(nullptr);
+        return;
+    }
+    if (listen(listen_fd, kBacklog) < 0) {
+        ESP_LOGE(TAG, "listen() failed: errno=%d", errno);
+        close(listen_fd);
         vTaskDelete(nullptr);
         return;
     }
 
-    /* 注册路由 */
-    const httpd_uri_t uri_dashboard = {
-        .uri = "/", .method = HTTP_GET, .handler = HandleDashboard,
-        .user_ctx = nullptr};
-    const httpd_uri_t uri_info = {
-        .uri = "/api/info", .method = HTTP_GET, .handler = HandleInfo,
-        .user_ctx = nullptr};
-    const httpd_uri_t uri_state = {
-        .uri = "/api/state", .method = HTTP_GET, .handler = HandleState,
-        .user_ctx = nullptr};
-    const httpd_uri_t uri_cmd = {
-        .uri = "/api/cmd", .method = HTTP_POST, .handler = HandleCmd,
-        .user_ctx = nullptr};
+    g_listen_fd = listen_fd;
+    g_running = true;
+    ESP_LOGI(TAG, "HTTP dashboard ready: http://k10-pet.local:%d", kPort);
 
-    httpd_register_uri_handler(g_server, &uri_dashboard);
-    httpd_register_uri_handler(g_server, &uri_info);
-    httpd_register_uri_handler(g_server, &uri_state);
-    httpd_register_uri_handler(g_server, &uri_cmd);
+    /* 接受循环 */
+    while (g_running) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int client_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+        if (client_fd < 0) {
+            if (g_running) vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
 
-    ESP_LOGI(TAG, "HTTP dashboard ready: http://k10-pet.local (port %d)", kPort);
-    vTaskDelete(nullptr);  /* 任务完成，自杀 */
+        /* 设置超时，防止慢速客户端卡住 */
+        struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        HttpRequest req;
+        if (ReadHttpRequest(client_fd, req)) {
+            ESP_LOGI(TAG, "%s %s", req.method.c_str(), req.uri.c_str());
+
+            if (req.uri == "/" || req.uri == "/index.html") {
+                HandleDashboard(client_fd);
+            } else if (req.uri == "/api/info" || req.uri.find("/api/info?") == 0) {
+                HandleInfo(client_fd);
+            } else if (req.uri == "/api/state" || req.uri.find("/api/state?") == 0) {
+                HandleState(client_fd, req.headers);
+            } else if (req.uri == "/api/cmd" && req.method == "POST") {
+                HandleCmd(client_fd, req.headers, req.body);
+            } else {
+                SendJson(client_fd, 404, "{\"ok\":false,\"code\":\"NOT_FOUND\"}");
+            }
+        }
+        close(client_fd);
+    }
+
+    close(listen_fd);
+    g_listen_fd = -1;
+    vTaskDelete(nullptr);
 }
 
+}  // namespace
+
+/* ───────── 对外接口 ───────── */
+
 int PetHttpStart(PetCloud* cloud, const char* pin) {
-    if (g_server) {
+    if (g_running) {
         ESP_LOGW(TAG, "HTTP server already running");
         return 0;
     }
@@ -486,8 +583,6 @@ int PetHttpStart(PetCloud* cloud, const char* pin) {
         g_pin[kMaxPinLen] = '\0';
     }
 
-    /* 不能在这里直接 mdns_init + httpd_start，因为 WiFi/TCP-IP 可能还没起。
-     * 起一个后台任务等网络就绪后再启动。 */
     ESP_LOGI(TAG, "HTTP server deferred, waiting for WiFi...");
     BaseType_t ok = xTaskCreate(PetHttpTask, "pet_http", 8192, cloud, 5, nullptr);
     if (ok != pdPASS) {
@@ -498,9 +593,10 @@ int PetHttpStart(PetCloud* cloud, const char* pin) {
 }
 
 void PetHttpStop() {
-    if (g_server) {
-        httpd_stop(g_server);
-        g_server = nullptr;
-        ESP_LOGI(TAG, "HTTP server stopped");
+    g_running = false;
+    if (g_listen_fd >= 0) {
+        close(g_listen_fd);
+        g_listen_fd = -1;
     }
+    ESP_LOGI(TAG, "HTTP server stopped");
 }
