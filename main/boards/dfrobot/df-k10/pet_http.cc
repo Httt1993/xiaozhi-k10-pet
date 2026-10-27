@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include <atomic>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -507,7 +508,7 @@ void HandleCmd(int fd, const std::string& headers, const std::string& body) {
  * 其他人全部超时 —— 就是「看板过一会儿显示连接失败」「手机端打不开」的根源（A-08/B-01）。
  */
 constexpr int kMaxClients = 4;
-volatile int g_active_clients = 0;
+std::atomic<int> g_active_clients{0};
 
 static void PetHttpClientTask(void* arg) {
     int client_fd = (int)(intptr_t)arg;
@@ -528,7 +529,7 @@ static void PetHttpClientTask(void* arg) {
         }
     }
     close(client_fd);
-    g_active_clients--;
+    g_active_clients.fetch_sub(1);
     vTaskDelete(nullptr);
 }
 
@@ -609,18 +610,18 @@ static void PetHttpTask(void* arg) {
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-        if (g_active_clients >= kMaxClients) {
+        if (g_active_clients.load() >= kMaxClients) {
             /* 过载保护：直接回 503 并关掉，好过把所有人一起拖死 */
             SendJson(client_fd, 503, "{\"ok\":false,\"code\":\"BUSY\"}");
             close(client_fd);
             continue;
         }
 
-        g_active_clients++;
+        g_active_clients.fetch_add(1);
         BaseType_t ok = xTaskCreate(PetHttpClientTask, "pet_httpc", 6144,
                                     (void*)(intptr_t)client_fd, 4, nullptr);
         if (ok != pdPASS) {
-            g_active_clients--;
+            g_active_clients.fetch_sub(1);
             SendJson(client_fd, 503, "{\"ok\":false,\"code\":\"BUSY\"}");
             close(client_fd);
         }
