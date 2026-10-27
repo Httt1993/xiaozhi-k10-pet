@@ -12,6 +12,7 @@
 #include "pet_strip.h"    // PET_PATCH_MARK
 #include "pet_tools.h"
 #include "pet_config.h"
+#include "pet_motion.h"
 #include "sd_probe.h"
 #include "assets/lang_config.h"
 
@@ -135,6 +136,10 @@ private:
             }
             app.ToggleChatState();
         }, this);
+        // PET_PATCH: A 双击 = 喂食（咀嚼 + 开心）
+        iot_button_register_cb(btn_a, BUTTON_DOUBLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
+            PetMotionInject(PET_MOTION_FEED);
+        }, this);
         iot_button_register_cb(btn_a, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<Df_K10Board*>(usr_data);
             auto codec = self->GetAudioCodec();
@@ -157,14 +162,10 @@ private:
             return !instance_->IoExpanderGetLevel(IO_EXPANDER_PIN_NUM_12);
         };
         ESP_ERROR_CHECK(iot_button_create(&btn_b_config, btn_b_driver_, &btn_b));
+        // PET_PATCH: B 单击 = 摸摸头（闭眼享受 + 爱心）。原来是切对话，现按设计稿让给摸头；
+        // 要切对话仍可用 A 键。
         iot_button_register_cb(btn_b, BUTTON_SINGLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
-            auto self = static_cast<Df_K10Board*>(usr_data);
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
-                self->EnterWifiConfigMode();
-                return;
-            }
-            app.ToggleChatState();
+            PetMotionInject(PET_MOTION_PET);
         }, this);
         iot_button_register_cb(btn_b, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<Df_K10Board*>(usr_data);
@@ -268,6 +269,9 @@ private:
         // new LedStripControl(led_strip_);   // PET_NO_LED_STRIP_TOOL
         // 注册宠物板载工具：灯语 / 表情 / 传感器
         pet_tools_ = new PetTools(led_strip_, display_, i2c_bus_);
+        // PET_PATCH: 启动 50Hz 体感引擎（复用 PetTools 已探测好的加速度计）。
+        // 无加速度时内部自动停摆，不影响开机。
+        PetMotionInit(&pet_tools_->sensors());
     }
 
 public:

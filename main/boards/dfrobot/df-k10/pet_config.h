@@ -20,6 +20,27 @@
 /* 加速度「拍一拍」判定阈值（毫克），越小越灵敏 */
 #define PET_TAP_THRESHOLD_MG 1300
 
+/* ==================================================================
+ * 活物感 UI（MotionEngine / 情绪 FSM / FX 层）
+ * ==================================================================
+ *
+ * PET_MOTION_ENABLE = 1 : 开启 50Hz 体感引擎 + 情绪状态机 + FX 粒子层。
+ *                         心情会跟着「拍一拍 / 摇一摇 / 摔落 / 静止」自己变。
+ * PET_MOTION_ENABLE = 0 : 只保留原表情 + 眨眼（向后兼容，出问题先关这里）。
+ */
+#define PET_MOTION_ENABLE 1
+
+/* 体感阈值（毫克，按 SC7A20H ±2g 量程），设计稿第 2.5 节实测值 */
+#define PET_MOTION_TAP_MG          1300   /* 拍一拍：单样本加速度突变 */
+#define PET_MOTION_FLIP_AZ_MG      (-550) /* 倒置：az 连续 300ms 低于此值 */
+#define PET_MOTION_SHAKE_RMS_MG    600    /* 猛摇：500ms 窗口 jerk RMS 超此值 */
+#define PET_MOTION_GENTLE_RMS_MG   200    /* 轻摇下限（200~600 = 轻摇） */
+#define PET_MOTION_FREEFALL_MG     250    /* 自由落体：合加速度低于此值 */
+#define PET_MOTION_IMPACT_MG       2000   /* 落地冲击：合加速度突变超过此值 */
+#define PET_MOTION_STILL_SIGMA_MG  25     /* 静止判定：2 秒合加速度标准差 */
+#define PET_MOTION_SIDE_LIE_AY_MG  700    /* 侧躺：|ay| 超此值 且 |az|<500 */
+#define PET_MOTION_SIDE_LIE_AZ_MG  500
+
 /*
  * 开机做一次「ALS 增益扫描」，把 1x/2x/4x/8x 四档的原始计数打进日志。
  *

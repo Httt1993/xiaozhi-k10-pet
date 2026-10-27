@@ -1,6 +1,7 @@
 #include "pet_tools.h"
 #include "pet_config.h"
 #include "pet_face_view.h"
+#include "pet_motion.h"
 #include "mcp_server.h"
 #include "display/lvgl_display/lvgl_theme.h"
 
@@ -394,12 +395,14 @@ void PetTools::RegisterSensorTools() {
 // 而是由云端按真实时间推演出来的状态，设备只负责呈现。
 
 std::string PetTools::StatusJson(const PetStatus& st, const char* mode) {
-    char buf[512];
+    char buf[640];
     snprintf(buf, sizeof(buf),
              "{\"hunger\":%d,\"energy\":%d,\"mood\":%d,\"sick\":%s,\"coins\":%d,\"level\":%d,"
-             "\"exp\":%d,\"face\":\"%s\",\"light\":\"%s\",\"mode\":\"%s\",\"say\":\"%s\"}",
+             "\"exp\":%d,\"face\":\"%s\",\"light\":\"%s\",\"mode\":\"%s\",\"say\":\"%s\","
+             "\"motion\":\"%s\"}",
              st.hunger, st.energy, st.mood, st.sick ? "true" : "false", st.coins, st.level, st.exp,
-             face_.c_str(), mood_name_.c_str(), mode, st.mood_word.c_str());
+             face_.c_str(), mood_name_.c_str(), mode, st.mood_word.c_str(),
+             PetMotionLastEventName());
     return std::string(buf);
 }
 

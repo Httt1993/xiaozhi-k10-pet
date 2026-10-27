@@ -52,6 +52,12 @@ private:
     PetSensors sensors_;
     PetCloud cloud_;
 
+public:
+    /* 体感引擎要复用同一颗传感器（同一个 I2C 总线句柄 + 已探测好的设备） */
+    PetSensors& sensors() { return sensors_; }
+
+private:
+
     int level_ = 5;
     std::string mood_name_ = "off";
     std::string face_ = "neutral";
