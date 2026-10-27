@@ -20,7 +20,7 @@
 namespace {
 
 /* ───────── 配置 ───────── */
-constexpr int kPort = 80;
+constexpr int kPort = 8080;  /* 80 被小智 OTA/WebSocket 占了（EADDRINUSE），改 8080 */
 constexpr int kMaxPinLen = 16;
 constexpr int kSeqCacheSize = 32;
 constexpr int kMaxRequestBody = 1024;
