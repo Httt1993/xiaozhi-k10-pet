@@ -5,6 +5,7 @@
 #include <strings.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "pet_config.h"
@@ -225,6 +226,58 @@ void PetFaceView::Build(lv_obj_t* parent) {
     }
 
     fx_ = new PetFxLayer(root_);
+
+    /* ---- 底部属性栏：饱食/心情/精力/金币 ---- */
+    stats_bar_ = lv_obj_create(root_);
+    lv_obj_remove_style_all(stats_bar_);
+    lv_obj_set_size(stats_bar_, kScreenW, 36);
+    lv_obj_set_pos(stats_bar_, 0, kScreenH - 36);
+    lv_obj_set_style_bg_opa(stats_bar_, LV_OPA_60, 0);
+    lv_obj_set_style_bg_color(stats_bar_, lv_color_hex(0x1A1210), 0);
+    lv_obj_set_style_border_width(stats_bar_, 0, 0);
+    lv_obj_set_style_pad_all(stats_bar_, 0, 0);
+    lv_obj_set_style_pad_hor(stats_bar_, 8, 0);
+    lv_obj_set_flex_flow(stats_bar_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(stats_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(stats_bar_, static_cast<lv_obj_flag_t>(
+                                      LV_OBJ_FLAG_SCROLLABLE |
+                                      LV_OBJ_FLAG_CLICKABLE));
+
+    static const lv_color_t kStatColors[4] = {
+        lv_color_hex(0xFFB74D),  /* 饱食 - 橙 */
+        lv_color_hex(0xFF8A9E),  /* 心情 - 粉 */
+        lv_color_hex(0x81C784),  /* 精力 - 绿 */
+        lv_color_hex(0xFFD54F),  /* 金币 - 金 */
+    };
+    static const char* const kStatNames[4] = {"饱食", "心情", "精力", "金币"};
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t* item = lv_obj_create(stats_bar_);
+        lv_obj_remove_style_all(item);
+        lv_obj_set_size(item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(item, 0, 0);
+        lv_obj_set_style_pad_all(item, 0, 0);
+        lv_obj_set_flex_flow(item, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(item, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(item, static_cast<lv_obj_flag_t>(
+                                    LV_OBJ_FLAG_SCROLLABLE |
+                                    LV_OBJ_FLAG_CLICKABLE));
+
+        /* 小标签（属性名） */
+        lv_obj_t* name_lbl = lv_label_create(item);
+        lv_label_set_text(name_lbl, kStatNames[i]);
+        lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xAAAAAA), 0);
+        lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_pad_bottom(name_lbl, 1, 0);
+
+        /* 数值 */
+        stat_labels_[i] = lv_label_create(item);
+        lv_label_set_text(stat_labels_[i], "--");
+        lv_obj_set_style_text_color(stat_labels_[i], kStatColors[i], 0);
+        lv_obj_set_style_text_font(stat_labels_[i], &lv_font_montserrat_14, 0);
+    }
 
     Apply();
     ESP_LOGI(TAG, "PET_PATCH: face view built (living-ui, %d expressions)",
@@ -653,6 +706,21 @@ void PetFaceView::SpawnFx(PetFxKind kind, int x, int y) {
     if (fx_ != nullptr) {
         fx_->Spawn(kind, x, y);
     }
+}
+
+void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
+    if (stat_labels_[0] == nullptr) {
+        return;
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", hunger);
+    lv_label_set_text(stat_labels_[0], buf);
+    snprintf(buf, sizeof(buf), "%d", mood);
+    lv_label_set_text(stat_labels_[1], buf);
+    snprintf(buf, sizeof(buf), "%d", energy);
+    lv_label_set_text(stat_labels_[2], buf);
+    snprintf(buf, sizeof(buf), "%d", coins);
+    lv_label_set_text(stat_labels_[3], buf);
 }
 
 void PetFaceView::SetEyeOpenRatio(float ratio) {
