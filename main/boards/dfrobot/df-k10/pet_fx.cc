@@ -45,13 +45,14 @@ lv_obj_t* MakeBar(lv_obj_t* parent, int w, int h, int angle_tenth,
 }
 
 lv_obj_t* MakeText(lv_obj_t* parent, const char* txt, lv_color_t c, int size) {
-    /* 刻意用 lv_font_default() 而不是 montserrat_xx：
+    /* 刻意用默认字体而不是 montserrat_xx：
      * sdkconfig 没有显式打开 montserrat 系列，引了会链接失败。
-     * 默认字体一定存在，大小差异用 transform_scale 补。 */
+     * 默认字体一定存在，大小差异用 transform_scale 补。
+     * 注意 LVGL 9.x API 名是 lv_font_get_default（旧版 lv_font_default 已删）。 */
     lv_obj_t* o = lv_label_create(parent);
     lv_obj_remove_style_all(o);
     lv_obj_set_style_text_color(o, c, 0);
-    lv_obj_set_style_text_font(o, lv_font_default(), 0);
+    lv_obj_set_style_text_font(o, lv_font_get_default(), 0);
     lv_label_set_text(o, txt);
     lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
     if (size >= 22) {
@@ -109,14 +110,12 @@ void PetFxLayer::Clear() {
     }
 }
 
-void PetFxLayer::AnimX(lv_anim_t* a) {
-    auto* o = static_cast<lv_obj_t*>(a->var);
-    lv_obj_set_x(o, a->current_value);
+void PetFxLayer::AnimX(void* var, int32_t v) {
+    lv_obj_set_x(static_cast<lv_obj_t*>(var), v);
 }
 
-void PetFxLayer::AnimY(lv_anim_t* a) {
-    auto* o = static_cast<lv_obj_t*>(a->var);
-    lv_obj_set_y(o, a->current_value);
+void PetFxLayer::AnimY(void* var, int32_t v) {
+    lv_obj_set_y(static_cast<lv_obj_t*>(var), v);
 }
 
 void PetFxLayer::AnimReady(lv_anim_t* a) {
@@ -247,9 +246,9 @@ void PetFxLayer::Spawn(PetFxKind kind, int x, int y) {
     lv_anim_t o;
     lv_anim_init(&o);
     lv_anim_set_var(&o, slot->root);
-    lv_anim_set_exec_cb(&o, [](lv_anim_t* a) {
-        lv_obj_set_style_opa(static_cast<lv_obj_t*>(a->var),
-                             static_cast<lv_opa_t>(a->current_value), 0);
+    lv_anim_set_exec_cb(&o, [](void* var, int32_t v) {
+        lv_obj_set_style_opa(static_cast<lv_obj_t*>(var),
+                             static_cast<lv_opa_t>(v), 0);
     });
     lv_anim_set_values(&o, LV_OPA_COVER, LV_OPA_TRANSP);
     lv_anim_set_time(&o, dur);

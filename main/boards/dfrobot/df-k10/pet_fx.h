@@ -51,8 +51,10 @@ private:
     };
 
     static void AnimReady(lv_anim_t* a);
-    static void AnimX(lv_anim_t* a);
-    static void AnimY(lv_anim_t* a);
+    /* LVGL 9.x 的 exec_cb 签名是 void(void* var, int32_t value)，
+     * 不是旧版的 void(lv_anim_t*) —— 照旧写会编译失败。 */
+    static void AnimX(void* var, int32_t v);
+    static void AnimY(void* var, int32_t v);
 
     void BuildShape(Slot& s, PetFxKind kind, int x, int y);
     void Release(Slot& s);

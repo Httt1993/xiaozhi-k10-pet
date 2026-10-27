@@ -614,9 +614,8 @@ void PetFaceView::PlaySquash(float sx, float sy, uint32_t ms) {
     lv_anim_t ay;
     lv_anim_init(&ay);
     lv_anim_set_var(&ay, face_group_);
-    lv_anim_set_exec_cb(&ay, [](lv_anim_t* an) {
-        lv_obj_set_style_transform_scale_y(static_cast<lv_obj_t*>(an->var),
-                                           an->current_value, 0);
+    lv_anim_set_exec_cb(&ay, [](void* var, int32_t v) {
+        lv_obj_set_style_transform_scale_y(static_cast<lv_obj_t*>(var), v, 0);
     });
     lv_anim_set_values(&ay, static_cast<int32_t>(sy * 256.0f), 256);
     lv_anim_set_time(&ay, ms);
@@ -627,9 +626,8 @@ void PetFaceView::PlaySquash(float sx, float sy, uint32_t ms) {
     lv_anim_t ax;
     lv_anim_init(&ax);
     lv_anim_set_var(&ax, face_group_);
-    lv_anim_set_exec_cb(&ax, [](lv_anim_t* an) {
-        lv_obj_set_style_transform_scale_x(static_cast<lv_obj_t*>(an->var),
-                                           an->current_value, 0);
+    lv_anim_set_exec_cb(&ax, [](void* var, int32_t v) {
+        lv_obj_set_style_transform_scale_x(static_cast<lv_obj_t*>(var), v, 0);
     });
     lv_anim_set_values(&ax, static_cast<int32_t>(sx * 256.0f), 256);
     lv_anim_set_time(&ax, ms);
