@@ -1139,6 +1139,8 @@ idf_component_register(SRCS ${SOURCES}
                         esp_driver_tsens
                         esp_app_format
                         esp_http_client
+                        esp_http_server
+                        mdns
                         app_update
                         spi_flash
                         mbedtls
