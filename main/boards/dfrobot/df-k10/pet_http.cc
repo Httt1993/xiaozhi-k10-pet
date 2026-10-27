@@ -406,16 +406,18 @@ void HandleCmd(int fd, const std::string& headers, const std::string& body) {
         return;
     }
 
-    const char* action = cJSON_GetObjectItem(root, "action")
+    const char* action_raw = cJSON_GetObjectItem(root, "action")
                              ? cJSON_GetObjectItem(root, "action")->valuestring : nullptr;
     int64_t seq = cJSON_GetObjectItem(root, "seq")
                       ? (int64_t)cJSON_GetObjectItem(root, "seq")->valuedouble : 0;
 
-    if (!action || !IsAllowedAction(action)) {
+    if (!action_raw || !IsAllowedAction(action_raw)) {
         cJSON_Delete(root);
         SendJson(fd, 403, "{\"ok\":false,\"code\":\"ACTION_BLOCKED\"}");
         return;
     }
+    /* 复制 action，避免 cJSON_Delete(root) 后悬空指针 */
+    std::string action(action_raw);
 
     /* seq 幂等 */
     if (seq > 0) {
@@ -468,7 +470,7 @@ void HandleCmd(int fd, const std::string& headers, const std::string& body) {
     }
 
     SendJson(fd, 200, response);
-    ESP_LOGI(TAG, "cmd=%s seq=%lld ok=%d code=%s", action, (long long)seq,
+    ESP_LOGI(TAG, "cmd=%s seq=%lld ok=%d code=%s", action.c_str(), (long long)seq,
              result.ok ? 1 : 0, result.code.c_str());
 }
 
