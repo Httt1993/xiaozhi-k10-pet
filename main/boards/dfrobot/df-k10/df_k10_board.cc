@@ -20,6 +20,7 @@
 #include <esp_log.h>
 #include <esp_idf_version.h>
 #include <esp_lcd_panel_vendor.h>
+#include <esp_timer.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 
@@ -275,6 +276,24 @@ private:
         PetMotionInit(&pet_tools_->sensors());
         // PET_PATCH: 启动家长看板 HTTP 服务（WiFi 起来后手机浏览器连 k10-pet.local）
         PetHttpStart(&pet_tools_->cloud(), "1234");
+        // PET_PATCH: 每 2 秒把宠物属性推到底部属性栏（饱食/心情/精力/金币）
+        {
+            esp_timer_handle_t stats_timer = nullptr;
+            esp_timer_create_args_t targs = {};
+            targs.callback = [](void* arg) {
+                auto* self = static_cast<Df_K10Board*>(arg);
+                if (self->pet_tools_ == nullptr || self->display_ == nullptr) return;
+                PetStatus st = self->pet_tools_->cloud().GetStatus();
+                if (st.valid) {
+                    self->display_->SetPetStats(st.hunger, st.mood, st.energy, st.coins);
+                }
+            };
+            targs.arg = this;
+            targs.dispatch_method = ESP_TIMER_TASK;
+            targs.name = "pet_stats";
+            esp_timer_create(&targs, &stats_timer);
+            esp_timer_start_periodic(stats_timer, 2000000);  // 2s
+        }
     }
 
 public:
