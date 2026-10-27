@@ -459,9 +459,13 @@ void Application::CheckAssetsVersion() {
 }
 
 void Application::CheckNewVersion() {
-    const int MAX_RETRY = 10;
+    /* 外网断开时别死磕：最多重试 5 次、单次间隔封顶 60 秒，然后放行去初始化协议。
+     * （测试项 C-03：断外网后「一直重试、不可恢复」—— 旧版指数退避能拖 40 分钟+，
+     *   看板/语音全被压住；这里收敛后设备几分钟内就能回到可用状态，网络恢复由
+     *   协议层的 60 秒重连定时器自行接上。） */
+    const int MAX_RETRY = 5;
     int retry_count = 0;
-    int retry_delay = 10;  // Initial retry delay in seconds
+    int retry_delay = 5;  // Initial retry delay in seconds
 
     auto& board = Board::GetInstance();
     while (true) {
@@ -504,6 +508,9 @@ void Application::CheckNewVersion() {
                 }
             }
             retry_delay *= 2;  // Double the retry delay
+            if (retry_delay > 60) {
+                retry_delay = 60;  // 封顶 60 秒，不做无界指数退避
+            }
             continue;
         }
         retry_count = 0;

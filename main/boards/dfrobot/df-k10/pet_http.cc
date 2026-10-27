@@ -14,6 +14,7 @@
 #include <lwip/netdb.h>
 
 #include <cstring>
+#include <cstdint>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -28,7 +29,6 @@ constexpr int kMaxPinLen = 16;
 constexpr int kSeqCacheSize = 32;
 constexpr int kMaxRequestBody = 2048;
 constexpr int kMaxRequestLine = 512;
-constexpr int kBacklog = 4;
 
 /* ───────── 状态 ───────── */
 PetCloud* g_cloud = nullptr;
@@ -167,9 +167,10 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 <div id="pin-box">
 <div style="font-size:48px">🐱</div>
 <h2 style="margin:8px 0">AI-Buddy 家长看板</h2>
-<p style="color:#a08060;margin-bottom:12px">请输入 PIN 口令</p>
+<p style="color:#a08060;margin-bottom:12px">请输入 PIN 口令（默认 1234）</p>
 <input id="pin-input" type="password" maxlength="16" placeholder="PIN">
 <button onclick="doLogin()">进入</button>
+<p id="pin-err" style="color:#e06060;font-size:13px;min-height:18px;margin-top:8px"></p>
 </div>
 </div>
 <div class="wrap" id="main" style="display:none">
@@ -207,20 +208,33 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 <div class="status-bar" id="status-bar">k10-pet.local:8080 · 本地直连</div>
 </div>
 <script>
-let PIN=localStorage.getItem('pet_pin')||'';
+/* PIN 改存 sessionStorage：关掉标签页就要重新输，避免「电脑端不用输 PIN」的观感（B-01） */
+let PIN=sessionStorage.getItem('pet_pin')||'';
 let seq=parseInt(localStorage.getItem('pet_seq')||'1');
+let pollBusy=false, failCount=0;
 const $=id=>document.getElementById(id);
-function doLogin(){PIN=$('pin-input').value.trim();
-if(PIN){localStorage.setItem('pet_pin',PIN);$('pin-overlay').style.display='none';
-$('main').style.display='block';poll();setInterval(poll,3000);}
-}
-if(PIN){$('pin-overlay').style.display='none';$('main').style.display='block';
-poll();setInterval(poll,3000);}
+function showLogin(msg){$('pin-overlay').style.display='flex';$('main').style.display='none';
+if(msg)$('pin-err').textContent=msg}
+function showMain(){$('pin-overlay').style.display='none';$('main').style.display='block';
+if(!window.__pollTimer){poll();window.__pollTimer=setInterval(poll,3000)}}
+async function doLogin(){const v=$('pin-input').value.trim();
+if(!v){showLogin('请输入 PIN');return}
+try{
+const r=await fetch('/api/state',{headers:{'x-pin':v}});
+if(r.status===401){showLogin('PIN 错误，请重试');return}
+if(!r.ok){showLogin('设备未就绪（'+r.status+'），稍后重试');return}
+PIN=v;sessionStorage.setItem('pet_pin',PIN);showMain();
+}catch(e){showLogin('连不上设备，检查是否在同一 WiFi')}}
 async function api(path,opt){opt=opt||{};
 opt.headers=Object.assign({'x-pin':PIN},opt.headers||{});
-const r=await fetch(path,opt);return r.json();}
-async function poll(){try{
-const d=await api('/api/state');if(!d.status)return;
+const r=await fetch(path,opt);
+if(r.status===401){sessionStorage.removeItem('pet_pin');PIN='';
+showLogin('PIN 已失效，请重新输入');throw new Error('NO_PIN')}
+return r.json()}
+async function poll(){if(pollBusy)return;pollBusy=true;try{
+const d=await api('/api/state');
+failCount=0;$('status-bar').textContent='k10-pet.local:8080 · 连接正常';
+if(!d.status){pollBusy=false;return}
 const s=d.status;
 $('v-hunger').textContent=s.hunger;$('b-hunger').style.width=Math.min(100,s.hunger)+'%';
 $('v-mood').textContent=s.mood;$('b-mood').style.width=Math.min(100,s.mood)+'%';
@@ -229,7 +243,10 @@ $('v-coins').textContent=s.coins;
 $('face').textContent=s.sick?'🤒':s.hunger<=15?'🥺':s.mood<=20?'😢':s.mood>=80?'😺':'🙂';
 $('say').textContent=d.say||'…';
 renderTasks(d.tasks||[]);
-}catch(e){$('status-bar').textContent='⚠️ 连接失败，重试中…'}}
+}catch(e){failCount++;
+/* 连续失败才提示，成功一次就恢复 —— 修「一直显示连接失败重试中」（A-08） */
+if(failCount>=2)$('status-bar').textContent='⚠️ 连接失败，重试中…（'+failCount+' 次）'}
+finally{pollBusy=false}}
 function renderTasks(tasks){const el=$('task-list');
 if(!tasks.length){el.innerHTML='<div style="color:#b09070;text-align:center;padding:12px">暂无任务</div>';return}
 el.innerHTML=tasks.map(t=>`<div class="task-item"><span>${t.title}</span>
@@ -240,11 +257,19 @@ const d=await api('/api/cmd',{method:'POST',
 headers:{'Content-Type':'application/json'},
 body:JSON.stringify({action,args:args||{},seq:seq++})});
 localStorage.setItem('pet_seq',seq);
-$('say').textContent=d.say||(d.ok?'完成！':'失败');poll();
+$('say').textContent=d.say||(d.ok?'完成！':'失败');
+if(d.ok===false)$('say').textContent='⚠️ '+(d.say||d.code||'失败');
+poll();
 }catch(e){$('say').textContent='⚠️ 指令发送失败'}}
 function publishTask(){const title=prompt('任务名称：');
 if(!title)return;const r=prompt('奖励金币数：','10');
 cmd('task_publish',{title,reward:parseInt(r)||10})}
+/* 已有 PIN 则先校验再进主界面；过期就弹登录框 */
+if(PIN){doLoginWithSaved()}else{showLogin('')}
+async function doLoginWithSaved(){try{
+const r=await fetch('/api/state',{headers:{'x-pin':PIN}});
+if(r.ok){showMain()}else{sessionStorage.removeItem('pet_pin');PIN='';showLogin('')}
+}catch(e){showLogin('')}}
 </script>
 </body>
 </html>)rawliteral";
@@ -476,10 +501,41 @@ void HandleCmd(int fd, const std::string& headers, const std::string& body) {
 
 /* ───────── HTTP 服务主循环 ───────── */
 
+/*
+ * 每个连接一个独立小任务：手机/电脑浏览器会同时开 2~3 条连接
+ * （HTML + 轮询 + 预连接），单线程 accept 一旦被慢客户端卡住 5 秒，
+ * 其他人全部超时 —— 就是「看板过一会儿显示连接失败」「手机端打不开」的根源（A-08/B-01）。
+ */
+constexpr int kMaxClients = 4;
+volatile int g_active_clients = 0;
+
+static void PetHttpClientTask(void* arg) {
+    int client_fd = (int)(intptr_t)arg;
+    HttpRequest req;
+    if (ReadHttpRequest(client_fd, req)) {
+        ESP_LOGI(TAG, "%s %s", req.method.c_str(), req.uri.c_str());
+
+        if (req.uri == "/" || req.uri == "/index.html") {
+            HandleDashboard(client_fd);
+        } else if (req.uri == "/api/info" || req.uri.find("/api/info?") == 0) {
+            HandleInfo(client_fd);
+        } else if (req.uri == "/api/state" || req.uri.find("/api/state?") == 0) {
+            HandleState(client_fd, req.headers);
+        } else if (req.uri == "/api/cmd" && req.method == "POST") {
+            HandleCmd(client_fd, req.headers, req.body);
+        } else {
+            SendJson(client_fd, 404, "{\"ok\":false,\"code\":\"NOT_FOUND\"}");
+        }
+    }
+    close(client_fd);
+    g_active_clients--;
+    vTaskDelete(nullptr);
+}
+
 static void PetHttpTask(void* arg) {
     /* 等 WiFi 拿到 IP（最多 60 秒） */
+    esp_netif_ip_info_t ip = {};
     for (int i = 0; i < 300; i++) {
-        esp_netif_ip_info_t ip;
         esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
             break;
@@ -498,6 +554,12 @@ static void PetHttpTask(void* arg) {
         ESP_LOGI(TAG, "mDNS: k10-pet.local");
     } else {
         ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
+    }
+
+    /* 手机浏览器经常解析不了 .local —— 把 IP 地址打出来，手机直接输 IP 也能开（B-01） */
+    if (ip.ip.addr != 0) {
+        ESP_LOGI(TAG, "PET_PATCH: 看板地址 http://" IPSTR ":%d  (或 http://k10-pet.local:%d)",
+                 IP2STR(&ip.ip), kPort, kPort);
     }
 
     /* 创建监听 socket */
@@ -521,7 +583,7 @@ static void PetHttpTask(void* arg) {
         vTaskDelete(nullptr);
         return;
     }
-    if (listen(listen_fd, kBacklog) < 0) {
+    if (listen(listen_fd, kMaxClients + 2) < 0) {
         ESP_LOGE(TAG, "listen() failed: errno=%d", errno);
         close(listen_fd);
         vTaskDelete(nullptr);
@@ -532,7 +594,7 @@ static void PetHttpTask(void* arg) {
     g_running = true;
     ESP_LOGI(TAG, "HTTP dashboard ready: http://k10-pet.local:%d", kPort);
 
-    /* 接受循环 */
+    /* 接受循环：每连接派发独立任务 */
     while (g_running) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -543,26 +605,25 @@ static void PetHttpTask(void* arg) {
         }
 
         /* 设置超时，防止慢速客户端卡住 */
-        struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+        struct timeval tv = {.tv_sec = 3, .tv_usec = 0};
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-        HttpRequest req;
-        if (ReadHttpRequest(client_fd, req)) {
-            ESP_LOGI(TAG, "%s %s", req.method.c_str(), req.uri.c_str());
-
-            if (req.uri == "/" || req.uri == "/index.html") {
-                HandleDashboard(client_fd);
-            } else if (req.uri == "/api/info" || req.uri.find("/api/info?") == 0) {
-                HandleInfo(client_fd);
-            } else if (req.uri == "/api/state" || req.uri.find("/api/state?") == 0) {
-                HandleState(client_fd, req.headers);
-            } else if (req.uri == "/api/cmd" && req.method == "POST") {
-                HandleCmd(client_fd, req.headers, req.body);
-            } else {
-                SendJson(client_fd, 404, "{\"ok\":false,\"code\":\"NOT_FOUND\"}");
-            }
+        if (g_active_clients >= kMaxClients) {
+            /* 过载保护：直接回 503 并关掉，好过把所有人一起拖死 */
+            SendJson(client_fd, 503, "{\"ok\":false,\"code\":\"BUSY\"}");
+            close(client_fd);
+            continue;
         }
-        close(client_fd);
+
+        g_active_clients++;
+        BaseType_t ok = xTaskCreate(PetHttpClientTask, "pet_httpc", 6144,
+                                    (void*)(intptr_t)client_fd, 4, nullptr);
+        if (ok != pdPASS) {
+            g_active_clients--;
+            SendJson(client_fd, 503, "{\"ok\":false,\"code\":\"BUSY\"}");
+            close(client_fd);
+        }
     }
 
     close(listen_fd);

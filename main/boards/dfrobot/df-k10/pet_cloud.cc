@@ -36,9 +36,9 @@ constexpr int kMaxRequest = 4096;      /* 请求体上限：state 1.5KB + args�
 constexpr int kMaxResponse = 8192;     /* 响应体上限 */
 constexpr int kHttpTimeoutMs = 7000;
 
-/* 数值规则与云端 pet-core.js 保持一一对应。改这里必须同步改云端，否则离线/在线切换会分叉。 */
-constexpr int kDecayStepSec = 1800;      /* 每 0.5 小时一步 */
-constexpr int kMaxDecaySteps = 48;       /* 单次最多补算 24 小时 */
+/* 数值规则与 pet_engine / 云端 pet-core.js 保持一一对应。改这里必须同步，否则离线/在线切换会分叉。 */
+constexpr int kDecayStepSec = PET_DECAY_STEP_SEC; /* 默认 60s 一步，见 pet_config.h */
+constexpr int kMaxDecaySteps = 1440;     /* 单次最多补算 24 小时（1440×60s） */
 constexpr int kSickAfterStarving = 43200;/* 饿到 0 持续 12 小时 → 生病 */
 constexpr int kExpPerAction = 2;
 constexpr int kExpPerLevel = 50;
@@ -664,79 +664,94 @@ bool PetCloud::ApplyResponse(const char* resp, PetActionResult& out) {
 
 // ==================================================================== 动作入口
 
+void PetCloud::SetActionHook(ActionHook hook) {
+    action_hook_ = std::move(hook);
+}
+
 PetActionResult PetCloud::Act(const std::string& action, const std::string& args_json) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!inited_) {
-        InitLocked();
-    }
-
     PetActionResult result;
+    bool have_result = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!inited_) {
+            InitLocked();
+        }
 
-    /* ---------- 有云端就走云端 ---------- */
-    if (!url_.empty()) {
-        cJSON* body = cJSON_CreateObject();
-        cJSON_AddStringToObject(body, "action", action.c_str());
+        /* ---------- 有云端就走云端 ---------- */
+        if (!url_.empty()) {
+            cJSON* body = cJSON_CreateObject();
+            cJSON_AddStringToObject(body, "action", action.c_str());
 
-        if (!state_json_.empty()) {
-            cJSON* state = cJSON_Parse(state_json_.c_str());
-            if (state != nullptr) {
-                cJSON_AddItemToObject(body, "state", state);
+            if (!state_json_.empty()) {
+                cJSON* state = cJSON_Parse(state_json_.c_str());
+                if (state != nullptr) {
+                    cJSON_AddItemToObject(body, "state", state);
+                }
+            } else {
+                cJSON_AddNullToObject(body, "state");
             }
-        } else {
-            cJSON_AddNullToObject(body, "state");
-        }
 
-        cJSON* args = nullptr;
-        if (!args_json.empty()) {
-            args = cJSON_Parse(args_json.c_str());
-        }
-        if (args == nullptr) {
-            args = cJSON_CreateObject();
-        }
-        cJSON_AddItemToObject(body, "args", args);
-
-        int64_t now = NowSec();
-        if (now > 0) {
-            cJSON_AddNumberToObject(body, "ts", static_cast<double>(now));
-        }
-
-        char* text = cJSON_PrintUnformatted(body);
-        std::string payload = text != nullptr ? text : "";
-        if (text != nullptr) {
-            cJSON_free(text);
-        }
-        cJSON_Delete(body);
-
-        if (!payload.empty() && static_cast<int>(payload.size()) < kMaxRequest) {
-            std::string resp;
-            std::string err;
-            int64_t t0 = NowMs();
-            bool http_ok = HttpPost(payload, resp, err);
-            if (http_ok && ApplyResponse(resp.c_str(), result)) {
-                fail_streak_ = 0;
-                last_sync_ms_ = NowMs();
-                PersistState();
-                ESP_LOGI(TAG, "PET_PATCH: %s via cloud ok=%d code=%s %dms (hunger=%d mood=%d coins=%d)",
-                         action.c_str(), result.ok ? 1 : 0, result.code.c_str(),
-                         static_cast<int>(NowMs() - t0), status_.hunger, status_.mood,
-                         status_.coins);
-                return result;
+            cJSON* args = nullptr;
+            if (!args_json.empty()) {
+                args = cJSON_Parse(args_json.c_str());
             }
-            result.error = http_ok ? result.error : err;
-            fail_streak_++;
-            ESP_LOGW(TAG, "PET_PATCH: %s cloud failed (%s), 降级本地 · 连续失败 %d 次",
-                     action.c_str(), err.empty() ? "解析失败" : err.c_str(), fail_streak_);
-        } else {
-            result.error = "请求体过大";
+            if (args == nullptr) {
+                args = cJSON_CreateObject();
+            }
+            cJSON_AddItemToObject(body, "args", args);
+
+            int64_t now = NowSec();
+            if (now > 0) {
+                cJSON_AddNumberToObject(body, "ts", static_cast<double>(now));
+            }
+
+            char* text = cJSON_PrintUnformatted(body);
+            std::string payload = text != nullptr ? text : "";
+            if (text != nullptr) {
+                cJSON_free(text);
+            }
+            cJSON_Delete(body);
+
+            if (!payload.empty() && static_cast<int>(payload.size()) < kMaxRequest) {
+                std::string resp;
+                std::string err;
+                int64_t t0 = NowMs();
+                bool http_ok = HttpPost(payload, resp, err);
+                if (http_ok && ApplyResponse(resp.c_str(), result)) {
+                    fail_streak_ = 0;
+                    last_sync_ms_ = NowMs();
+                    PersistState();
+                    ESP_LOGI(TAG, "PET_PATCH: %s via cloud ok=%d code=%s %dms (hunger=%d mood=%d coins=%d)",
+                             action.c_str(), result.ok ? 1 : 0, result.code.c_str(),
+                             static_cast<int>(NowMs() - t0), status_.hunger, status_.mood,
+                             status_.coins);
+                    have_result = true;
+                } else {
+                    result.error = http_ok ? result.error : err;
+                    fail_streak_++;
+                    ESP_LOGW(TAG, "PET_PATCH: %s cloud failed (%s), 降级本地 · 连续失败 %d 次",
+                             action.c_str(), err.empty() ? "解析失败" : err.c_str(), fail_streak_);
+                }
+            } else {
+                result.error = "请求体过大";
+            }
+        }
+
+        /* ---------- 云端不可用：本地演化 ---------- */
+        if (!have_result) {
+            std::string cloud_err = result.error;
+            result = ActLocal(action, args_json);
+            result.error = cloud_err;
+            /* 本地算出来的状态同样要落盘，否则断网期间喂的饭重启就没了 */
+            PersistState();
         }
     }
 
-    /* ---------- 云端不可用：本地演化 ---------- */
-    PetActionResult local = ActLocal(action, args_json);
-    local.error = result.error;
-    /* 本地算出来的状态同样要落盘，否则断网期间喂的饭重启就没了 */
-    PersistState();
-    return local;
+    /* 钩子在锁外调用：联动里可能再读状态（GetStatus），避免同线程重入死锁 */
+    if (action_hook_) {
+        action_hook_(result, action);
+    }
+    return result;
 }
 
 // ==================================================================== 本地兜底

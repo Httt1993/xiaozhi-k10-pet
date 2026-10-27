@@ -59,6 +59,10 @@ public:
     /* HTTP 看板需要访问 PetCloud 来执行动作 */
     PetCloud& cloud() { return cloud_; }
 
+    /* 光感被动看护：骤亮（手电照额头）→ 好奇脸，骤暗（遮挡）→ 困倦脸。
+     * 由板级 2 秒定时器轮询调用（测试项 A-15「光感互动孔」）。 */
+    void WatchLightTick();
+
 private:
 
     int level_ = 5;
@@ -76,6 +80,11 @@ private:
     // 状态缓存：30 秒内重复问状态就不再打云端，避免一句话触发多次网络往返
     int64_t last_status_ms_ = 0;
     std::string last_react_event_;  // 上一次联动用的最高优先级事件
+
+    // 光感看护状态（WatchLightTick）
+    float last_lux_ = 0.0f;
+    bool light_valid_ = false;
+    int64_t light_react_ms_ = 0;
 };
 
 #endif  // _PET_TOOLS_H_

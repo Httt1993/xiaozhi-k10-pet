@@ -30,8 +30,8 @@ namespace pet_engine {
 /** 运行时配置。字段与 pet-core.js 的 DEFAULTS 一一对应。 */
 struct Config {
     std::string pet_name = "乔利";
-    double decay_step_hours = 0.5;   // 每半小时衰减一步
-    int max_decay_steps = 48;        // 单次最多补算 48 步（24h），防久不开机瞬间清零
+    double decay_step_hours = 1.0 / 60.0;  // 默认 1 分钟衰减一步（PET_DECAY_STEP_SEC=60）
+    int max_decay_steps = 1440;       // 单次最多补算 1440 步（=24h），防久不开机瞬间清零
     int64_t sick_after_starving = 43200;  // 饿到 0 持续 12h → 生病
     int daily_task_reward_cap = 5;
     int exp_per_action = 2;

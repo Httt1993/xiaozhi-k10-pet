@@ -227,23 +227,8 @@ void PetFaceView::Build(lv_obj_t* parent) {
 
     fx_ = new PetFxLayer(root_);
 
-    /* ---- 底部属性栏：饱食/心情/精力/金币 ---- */
-    stats_bar_ = lv_obj_create(root_);
-    lv_obj_remove_style_all(stats_bar_);
-    lv_obj_set_size(stats_bar_, kScreenW, 36);
-    lv_obj_set_pos(stats_bar_, 0, kScreenH - 36);
-    lv_obj_set_style_bg_opa(stats_bar_, LV_OPA_60, 0);
-    lv_obj_set_style_bg_color(stats_bar_, lv_color_hex(0x1A1210), 0);
-    lv_obj_set_style_border_width(stats_bar_, 0, 0);
-    lv_obj_set_style_pad_all(stats_bar_, 0, 0);
-    lv_obj_set_style_pad_hor(stats_bar_, 8, 0);
-    lv_obj_set_flex_flow(stats_bar_, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(stats_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(stats_bar_, static_cast<lv_obj_flag_t>(
-                                      LV_OBJ_FLAG_SCROLLABLE |
-                                      LV_OBJ_FLAG_CLICKABLE));
-
+    /* ---- 属性能量条：上方 2 个（饱食/心情）+ 下方 2 个（精力/金币） ----
+     * 测试项 A-06：数字改成能量条展示，四角/上下两行皆可，这里取「上 2 下 2」。 */
     static const lv_color_t kStatColors[4] = {
         lv_color_hex(0xFFB74D),  /* 饱食 - 橙 */
         lv_color_hex(0xFF8A9E),  /* 心情 - 粉 */
@@ -251,32 +236,59 @@ void PetFaceView::Build(lv_obj_t* parent) {
         lv_color_hex(0xFFD54F),  /* 金币 - 金 */
     };
     static const char* const kStatNames[4] = {"饱食", "心情", "精力", "金币"};
+    /* 每个能量条的锚点：{x, y}，宽 104、总高 30（标题行 + 条） */
+    static const int16_t kStatPos[4][2] = {
+        {8, 34},      /* 饱食 - 左上 */
+        {128, 34},    /* 心情 - 右上 */
+        {8, 282},     /* 精力 - 左下 */
+        {128, 282},   /* 金币 - 右下 */
+    };
+    constexpr int kW = 104;
     for (int i = 0; i < 4; i++) {
-        lv_obj_t* item = lv_obj_create(stats_bar_);
-        lv_obj_remove_style_all(item);
-        lv_obj_set_size(item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-        lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(item, 0, 0);
-        lv_obj_set_style_pad_all(item, 0, 0);
-        lv_obj_set_flex_flow(item, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(item, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_clear_flag(item, static_cast<lv_obj_flag_t>(
-                                    LV_OBJ_FLAG_SCROLLABLE |
-                                    LV_OBJ_FLAG_CLICKABLE));
+        lv_obj_t* box = lv_obj_create(root_);
+        lv_obj_remove_style_all(box);
+        lv_obj_set_size(box, kW, 30);
+        lv_obj_set_pos(box, kStatPos[i][0], kStatPos[i][1]);
+        lv_obj_set_style_bg_opa(box, LV_OPA_40, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x1A1210), 0);
+        lv_obj_set_style_radius(box, 8, 0);
+        lv_obj_set_style_pad_all(box, 3, 0);
+        lv_obj_clear_flag(box, static_cast<lv_obj_flag_t>(
+                                   LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
 
-        /* 小标签（属性名） */
-        lv_obj_t* name_lbl = lv_label_create(item);
+        /* 标题行：左标签 + 右数值 */
+        lv_obj_t* name_lbl = lv_label_create(box);
         lv_label_set_text(name_lbl, kStatNames[i]);
         lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xAAAAAA), 0);
         lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_pad_bottom(name_lbl, 1, 0);
+        lv_obj_set_pos(name_lbl, 0, 0);
 
-        /* 数值 */
-        stat_labels_[i] = lv_label_create(item);
+        stat_labels_[i] = lv_label_create(box);
         lv_label_set_text(stat_labels_[i], "--");
         lv_obj_set_style_text_color(stat_labels_[i], kStatColors[i], 0);
         lv_obj_set_style_text_font(stat_labels_[i], &lv_font_montserrat_14, 0);
+        lv_obj_align(stat_labels_[i], LV_ALIGN_TOP_RIGHT, 0, 0);
+
+        /* 能量条轨道 + 填充 */
+        lv_obj_t* track = lv_obj_create(box);
+        lv_obj_remove_style_all(track);
+        lv_obj_set_size(track, kW - 6, 8);
+        lv_obj_set_pos(track, 3, 18);
+        lv_obj_set_style_bg_opa(track, LV_OPA_30, 0);
+        lv_obj_set_style_bg_color(track, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_radius(track, 4, 0);
+        lv_obj_clear_flag(track, static_cast<lv_obj_flag_t>(
+                                    LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+
+        stat_bars_[i] = lv_obj_create(track);
+        lv_obj_remove_style_all(stat_bars_[i]);
+        lv_obj_set_size(stat_bars_[i], 4, 8);
+        lv_obj_set_pos(stat_bars_[i], 0, 0);
+        lv_obj_set_style_bg_opa(stat_bars_[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(stat_bars_[i], kStatColors[i], 0);
+        lv_obj_set_style_radius(stat_bars_[i], 4, 0);
+        lv_obj_clear_flag(stat_bars_[i], static_cast<lv_obj_flag_t>(
+                                             LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
     }
 
     Apply();
@@ -712,15 +724,19 @@ void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
     if (stat_labels_[0] == nullptr) {
         return;
     }
+    const int values[4] = {hunger, mood, energy, coins};
     char buf[16];
-    snprintf(buf, sizeof(buf), "%d", hunger);
-    lv_label_set_text(stat_labels_[0], buf);
-    snprintf(buf, sizeof(buf), "%d", mood);
-    lv_label_set_text(stat_labels_[1], buf);
-    snprintf(buf, sizeof(buf), "%d", energy);
-    lv_label_set_text(stat_labels_[2], buf);
-    snprintf(buf, sizeof(buf), "%d", coins);
-    lv_label_set_text(stat_labels_[3], buf);
+    for (int i = 0; i < 4; i++) {
+        int v = values[i];
+        if (v < 0) v = 0;
+        snprintf(buf, sizeof(buf), "%d", v);
+        lv_label_set_text(stat_labels_[i], buf);
+        if (stat_bars_[i] != nullptr) {
+            /* 能量条宽度：0~100 映射到轨道宽 98px（coins 超 100 就拉满） */
+            int pct = v > 100 ? 100 : v;
+            lv_obj_set_width(stat_bars_[i], pct <= 0 ? 2 : (98 * pct) / 100);
+        }
+    }
 }
 
 void PetFaceView::SetEyeOpenRatio(float ratio) {

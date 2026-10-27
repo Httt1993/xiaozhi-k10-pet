@@ -109,6 +109,37 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
     RegisterSensorTools();
     RegisterCloudTools();
 
+    /*
+     * 家长看板 / HTTP / 心跳 这些非语音路径执行动作时，也要让设备「有反应」：
+     * 灯色表情跟着状态事件走，宠物话术用通知条冒出来，动作成功给个表情反馈。
+     * （测试项 A-11/A-12：看板发任务/指令后设备无任何响应 —— 就是缺了这个钩子）
+     */
+    cloud_.SetActionHook([this](const PetActionResult& r, const std::string& action) {
+        ReactToEvents(r);
+        /* 状态已变，30 秒缓存作废，下次问状态重新同步 */
+        last_status_ms_ = 0;
+
+        /* 静默动作不弹通知：sync/task_list/ping 会被看板 3 秒一次地轮询 */
+        const bool quiet = action == "sync" || action == "task_list" ||
+                           action == "ping" || action == "chat" || action.empty();
+        if (quiet) {
+            return;
+        }
+        if (display_ != nullptr && !r.say.empty()) {
+            display_->ShowNotification(r.say.c_str(), 2500);
+        }
+        if (display_ != nullptr && r.ok) {
+            if (action == "feed" || action == "play" || action == "pet" ||
+                action == "task_publish" || action == "story" || action == "song") {
+                display_->SetPetFace("happy");
+            } else if (action == "sleep") {
+                display_->SetPetFace("sleepy");
+            } else if (action == "heal" || action == "medicine") {
+                display_->SetPetFace("neutral");
+            }
+        }
+    });
+
     ESP_LOGI(TAG, "pet tools registered (sensors: th=%d light=%d accel=%d, cloud=%s)",
              sensors_.HasTempHumid() ? 1 : 0, sensors_.HasLight() ? 1 : 0,
              sensors_.HasAccel() ? 1 : 0, cloud_.cloud_enabled() ? "on" : "local");
@@ -116,6 +147,45 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
     /* 本地模式下开了也没用（cloud_enabled 会直接 return），索性按配置传，
        这样切换云端/本地不用改两处。 */
     cloud_.StartHeartbeat(PET_HEARTBEAT_SEC);
+}
+
+void PetTools::WatchLightTick() {
+#if PET_LIGHT_WATCH
+    if (!sensors_.HasLight()) {
+        return;
+    }
+    uint16_t ch0 = 0, ch1 = 0;
+    float lux = 0.0f;
+    if (!sensors_.ReadLight(ch0, ch1, lux)) {
+        return;
+    }
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    /* 反应冷却 3 秒：手电晃动不要连续换脸 */
+    if (now_ms - light_react_ms_ < 3000) {
+        last_lux_ = lux;
+        light_valid_ = true;
+        return;
+    }
+    if (light_valid_ && display_ != nullptr) {
+        /* 骤亮：手电照额头（比上一次亮 2.5 倍以上且绝对值够大） */
+        bool sudden_bright = lux > 120.0f && lux > last_lux_ * 2.5f + 40.0f;
+        /* 骤暗：遮挡光感孔 */
+        bool sudden_dark = last_lux_ > 120.0f && lux * 2.5f + 40.0f < last_lux_;
+        if (sudden_bright) {
+            display_->SetPetFace("curious");
+            ESP_LOGI(TAG, "PET_PATCH: light jump %.0f -> %.0f lux -> curious", last_lux_,
+                     static_cast<double>(lux));
+            light_react_ms_ = now_ms;
+        } else if (sudden_dark) {
+            display_->SetPetFace("sleepy");
+            ESP_LOGI(TAG, "PET_PATCH: light drop %.0f -> %.0f lux -> sleepy", last_lux_,
+                     static_cast<double>(lux));
+            light_react_ms_ = now_ms;
+        }
+    }
+    last_lux_ = lux;
+    light_valid_ = true;
+#endif
 }
 
 void PetTools::RegisterMoodTools() {

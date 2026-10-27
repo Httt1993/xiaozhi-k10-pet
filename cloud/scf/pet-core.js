@@ -24,8 +24,8 @@
 
 const DEFAULTS = {
   PET_NAME: '乔利',
-  DECAY_STEP_HOURS: 0.5,      // 每半小时衰减一步
-  MAX_DECAY_STEPS: 48,        // 单次最多补算 48 步（24 小时），防止久不开机被瞬间清零
+  DECAY_STEP_HOURS: 1 / 60,   // 默认 1 分钟一步（与设备端 PET_DECAY_STEP_SEC=60 同步）；游玩档可改回 0.5
+  MAX_DECAY_STEPS: 1440,      // 单次最多补算 1440 步（24 小时），防止久不开机被瞬间清零
   SICK_AFTER_STARVING: 43200, // 饿到 0 持续 12 小时 → 生病
   DAILY_TASK_REWARD_CAP: 5,
   EXP_PER_ACTION: 2,

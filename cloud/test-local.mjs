@@ -14,6 +14,8 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const core = require('./scf/pet-core.js');
+const scf = require('./scf/index.js');
+const store = require('./scf/store.js');
 
 let pass = 0;
 let fail = 0;
@@ -34,10 +36,16 @@ function eq(actual, expect, label) {
   ok(actual === expect, label, { actual, expect });
 }
 
-/** 用固定「现在」调一次，避免测试自己跑着跑着跨过 2 秒节流窗口 */
+/**
+ * 用固定「现在」调一次，避免测试自己跑着跑着跨过 2 秒节流窗口。
+ *
+ * 默认给 0.5 小时一步的老节奏：剧本里 t0+几百秒的推进不该把数值吃掉，
+ * 否则喂食/玩耍断言全被衰减污染。真正的衰减数学在第 2 节用 1 分钟档单独验。
+ */
+const SLOW_DECAY = { PET_DECAY_STEP_HOURS: 0.5, PET_MAX_DECAY_STEPS: 48 };
 function call(action, state, args, tsOverride, env) {
   const ts = tsOverride === undefined ? Math.floor(Date.now() / 1000) : tsOverride;
-  return core.run({ action, state, args: args || {}, ts }, env || {});
+  return core.run({ action, state, args: args || {}, ts }, env || SLOW_DECAY);
 }
 
 function section(title) {
@@ -69,29 +77,39 @@ ok(typeof r.say === 'string' && r.say.length > 0, '没有动作时也有一句�
 let state = r.state;
 
 // ==================================================================== 2. 时间衰减
-section('2. 时间衰减（关机也照饿）');
+section('2. 时间衰减（关机也照饿 · 默认 1 分钟一步，A-07）');
 
-// 把 lastDecay 拨回 1 小时前
+/* 本节显式用「1 分钟一步」档 = 设备端 PET_DECAY_STEP_SEC=60 的默认值 */
+const FAST_DECAY = { PET_DECAY_STEP_HOURS: 1 / 60, PET_MAX_DECAY_STEPS: 1440 };
+
+// 把 lastDecay 拨回 2 分钟前（默认 1 分钟一步）
 let s = JSON.parse(JSON.stringify(state));
-s.pet.lastDecay = t0 - 3600;
-r = call('sync', s, {}, t0);
-eq(r.decay_steps, 2, '1 小时 = 2 步（每 0.5 小时一步）');
+s.pet.lastDecay = t0 - 120;
+r = call('sync', s, {}, t0, FAST_DECAY);
+eq(r.decay_steps, 2, '2 分钟 = 2 步（每 1 分钟一步）');
 eq(r.status.hunger, 56, '饱食 60 → 56（每步 -2）');
 eq(r.status.energy, 78, '精力 80 → 78（每步 -1）');
 eq(r.status.mood, 78, '心情 80 → 78（每步 -1）');
 
+// 验收点：静置 1 分钟内要能看到衰减（A-07）
+s = JSON.parse(JSON.stringify(state));
+s.pet.lastDecay = t0 - 60;
+r = call('sync', s, {}, t0, FAST_DECAY);
+ok((r.decay_steps || 0) >= 1 && r.status.hunger < 60,
+   '1 分钟内衰减肉眼可见（饱食下降）', { steps: r.decay_steps, hunger: r.status.hunger });
+
 // 24 小时以上的封顶
 s = JSON.parse(JSON.stringify(state));
 s.pet.lastDecay = t0 - 100 * 3600;
-r = call('sync', s, {}, t0);
-eq(r.decay_steps, 48, '超过 24 小时封顶为 48 步，不会一次清零');
+r = call('sync', s, {}, t0, FAST_DECAY);
+eq(r.decay_steps, 1440, '超过 24 小时封顶为 1440 步，不会一次清零');
 
-// 余数不丢：1.25 小时只走 2 步，但 lastDecay 只推进 1 小时
+// 余数不丢：150 秒只走 2 步，但 lastDecay 只推进 120 秒
 s = JSON.parse(JSON.stringify(state));
-s.pet.lastDecay = t0 - 4500;
-r = call('sync', s, {}, t0);
-eq(r.decay_steps, 2, '1.25 小时走 2 步');
-eq(r.state.pet.lastDecay, t0 - 4500 + 3600, 'lastDecay 只推进整步，余数保留');
+s.pet.lastDecay = t0 - 150;
+r = call('sync', s, {}, t0, FAST_DECAY);
+eq(r.decay_steps, 2, '150 秒走 2 步');
+eq(r.state.pet.lastDecay, t0 - 150 + 120, 'lastDecay 只推进整步，余数保留');
 
 // ==================================================================== 3. 喂食
 section('3. 喂食');
@@ -277,12 +295,12 @@ s.pet.lastDecay = t0;
 // 设备时间比服务器快 3 小时，且 state 的 lastDecay 按错误时间算
 r = core.run({ action: 'sync', state: s, args: {}, ts: t0 + 3 * 3600 }, {});
 ok(Math.abs(r.skew_sec + 3 * 3600) <= 2, '上报时钟偏差（服务器 - 设备 ≈ -3h）', r.skew_sec);
-ok((r.decay_steps || 0) === 0, '偏差超过 5 分钟时改用服务器时间，不会误算 6 步衰减');
+ok((r.decay_steps || 0) === 0, '偏差超过 5 分钟时改用服务器时间，不会误算 180 步衰减');
 
 // 偏差在 5 分钟内时信任设备时间
-r = core.run({ action: 'sync', state: s, args: {}, ts: t0 + 120 }, {});
-ok(Math.abs(r.skew_sec + 120) <= 2, '小偏差照常上报', r.skew_sec);
-eq(r.decay_steps, undefined, '偏差 2 分钟不足以走一步衰减');
+r = core.run({ action: 'sync', state: s, args: {}, ts: t0 + 30 }, {});
+ok(Math.abs(r.skew_sec + 30) <= 2, '小偏差照常上报', r.skew_sec);
+eq(r.decay_steps, undefined, '偏差 30 秒不足以走一步衰减');
 
 // ==================================================================== 8. 状态体积
 section('8. 状态体积（要装进 NVS）');
@@ -320,6 +338,40 @@ eq(r.status.coins, 77, '不带前缀的 INIT_COINS 也认（兼容旧写法）')
 
 r = core.run({ action: 'sync', state: null, args: {}, ts: t0 }, { PET_NAME: '甲', NAME: '乙' });
 eq(r.status.name, '甲', '两种写法同时存在时 PET_ 前缀优先');
+
+// ==================================================================== 11. 看板任务送达（冷启动时延优化）
+section('11. 看板任务送达（冷启动首 sync 即达）');
+
+const env = {};
+
+// 11a. 冷启动：设备首次 sync（state=null）必须立刻拿到看板已发布的任务
+const at1 = Date.now();
+store.pushPending(env, 'task_publish', { title: '整理书包', reward: 10 }, '家长布置', at1);
+let dr = scf.deviceSync(env, { action: 'sync', state: null }, Math.floor(Date.now() / 1000));
+ok(dr.out.ok, '设备首次 sync 正常返回');
+ok(dr.coldStart === true, '识别为冷启动');
+ok(dr.out.fresh === true, '冷启动 fresh 标记仍为首次创建');
+const coldTasks = dr.out.state.tasks || [];
+ok(
+  coldTasks.some((t) => t.title === '整理书包' && t.status === 'pending'),
+  '冷启动首 sync 即送达看板已发布的任务（延迟≈0）',
+  coldTasks.map((t) => t.title)
+);
+
+// 11b. 已在线设备（带 state）也能照常送达，且不误判冷启动
+const warmState = dr.out.state;
+const at2 = Date.now();
+store.pushPending(env, 'task_publish', { title: '倒垃圾', reward: 5 }, '家长布置', at2);
+dr = scf.deviceSync(env, { action: 'sync', state: warmState }, Math.floor(Date.now() / 1000));
+const warmTasks = dr.out.state.tasks || [];
+ok(
+  warmTasks.some((t) => t.title === '倒垃圾' && t.status === 'pending'),
+  '已在线设备下次 sync 照样收到新任务',
+  warmTasks.map((t) => t.title)
+);
+ok(warmTasks.some((t) => t.title === '整理书包'), '旧任务不丢');
+ok(dr.coldStart === false, '带 state 的 sync 不误判为冷启动');
+ok(dr.out.fresh !== true, '带 state 不再标记 fresh');
 
 // ==================================================================== 汇总
 console.log('\n' + '─'.repeat(50));

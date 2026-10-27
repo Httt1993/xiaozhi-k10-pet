@@ -287,6 +287,8 @@ private:
                 if (st.valid) {
                     self->display_->SetPetStats(st.hunger, st.mood, st.energy, st.coins);
                 }
+                /* 光感看护（A-15）：手电/遮挡触发表情反馈，顺同一节拍轮询 */
+                self->pet_tools_->WatchLightTick();
             };
             targs.arg = this;
             targs.dispatch_method = ESP_TIMER_TASK;

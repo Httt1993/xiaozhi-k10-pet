@@ -248,6 +248,51 @@ function drainPending(env, state, ts) {
   return { state: cur, applied };
 }
 
+/**
+ * 设备同步主流程（抽出便于单测）：
+ *   1. 没有 state（首次上线）先初始化空白宠物；
+ *   2. 把看板排队的指令压进 state（drainPending）；
+ *   3. 跑一次 core.run 出最终结果。
+ * 纯同步、不碰网络，返回 { out, applied, coldStart }。
+ *
+ * 关键优化（送达时延）：首次上线（state 为 null）也要送 —— 先初始化空白宠物再 drain，
+ * 设备连上后的第一次心跳就能立刻拿到看板已发布的任务，
+ * 冷启动送达延迟从「等下一个心跳（~60-120s）」降到「0」。
+ * （设备端 ApplyResponse 无条件接受云端 state，不依赖 fresh 标志，改这里无需重烧固件。）
+ */
+function deviceSync(env, body, deviceTs) {
+  const action = body.action || 'sync';
+  let incoming = body.state === undefined ? null : body.state;
+  let applied = [];
+  let coldStart = false;
+
+  if (!incoming || typeof incoming !== 'object') {
+    // 首次同步：造一份空白宠物，让排队指令有「容器」可落
+    const init = core.run({ action: 'sync', state: null, ts: deviceTs }, env);
+    incoming = (init && init.state) || null;
+    coldStart = true;
+  }
+
+  if (incoming && typeof incoming === 'object') {
+    const merged = drainPending(env, incoming, deviceTs);
+    incoming = merged.state;
+    applied = merged.applied;
+  }
+
+  const out = core.run(
+    { action, state: incoming, args: body.args || {}, ts: deviceTs },
+    env
+  );
+
+  /* 冷启动（设备首次上线、state 为 null）时，上面的 incoming 是从空白宠物初始化来的，
+     core.run 会把它当成「已有 state」从而 fresh=false。
+     但设备视角这是第一次拿到宠物，语义上仍是 fresh，这里还原回去，
+     保证「首次创建」语义一致（设备端其实不读 fresh，但语义要对）。 */
+  if (coldStart && out) out.fresh = true;
+
+  return { out, applied, coldStart };
+}
+
 /** 家长看板要的那一份 JSON（已经算好 level、任务、待送达） */
 function parentSnapshot(env) {
   const st = store.load(env);
@@ -293,6 +338,7 @@ function parentSnapshot(env) {
   return out;
 }
 
+exports.deviceSync = deviceSync;
 exports.main_handler = async (event, context) => {
   let req;
   try {
@@ -387,27 +433,14 @@ exports.main_handler = async (event, context) => {
   }
 
   /* 设备这次请求顺路当一次「送货」：把家长看板排队的指令压进它上报的 state。
-     没有 state（首次初始化）就跳过 —— 队列留着，等有 state 再送。 */
-  let incoming = body.state === undefined ? null : body.state;
-  let applied = [];
-  if (incoming && typeof incoming === 'object') {
-    const merged = drainPending(process.env, incoming, deviceTs);
-    incoming = merged.state;
-    applied = merged.applied;
-  }
-
+     首次上线（state 为 null）也要送 —— 见 deviceSync（冷启动送达延迟降到 0）。
+     （设备端 ApplyResponse 无条件接受云端 state，不依赖 fresh 标志，改这里无需重烧固件。） */
+  let out, applied;
   const t0 = Date.now();
-  let out;
   try {
-    out = core.run(
-      {
-        action,
-        state: incoming,
-        args: body.args || {},
-        ts: deviceTs,
-      },
-      process.env
-    );
+    const r = deviceSync(process.env, body, deviceTs);
+    out = r.out;
+    applied = r.applied;
   } catch (err) {
     console.error('[pet] 执行异常', action, err && err.stack);
     return json(500, {

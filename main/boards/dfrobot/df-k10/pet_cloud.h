@@ -2,6 +2,7 @@
 #define _PET_CLOUD_H_
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -78,6 +79,15 @@ public:
      */
     PetActionResult Act(const std::string& action, const std::string& args_json);
 
+    /**
+     * 动作完成钩子：每次 Act() 结束（无论云端还是本地算）都会回调。
+     * 用途：家长看板/HTTP 路径执行完动作后，同步触发设备端「灯 + 脸 + 提示」联动，
+     * 否则看板点按钮设备没任何反应（测试项 A-11/A-12）。
+     * 线程：在调用 Act 的线程里同步执行，钩子里不要做耗时操作。
+     */
+    using ActionHook = std::function<void(const PetActionResult& result, const std::string& action)>;
+    void SetActionHook(ActionHook hook);
+
     /** 任务清单的人话版，直接给模型 */
     std::string TaskListText(bool include_done = false);
 
@@ -136,6 +146,7 @@ private:
     PetStatus status_;
     std::string url_;
     std::string key_;
+    ActionHook action_hook_;   /* Act 完成后的设备联动钩子 */
 
     int64_t last_sync_ms_ = 0;
     int last_latency_ms_ = 0;
