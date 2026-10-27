@@ -4,8 +4,11 @@
 #include <cJSON.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
+#include <esp_netif.h>
 #include <esp_timer.h>
 #include <mdns.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <cstring>
 #include <ctime>
@@ -404,16 +407,24 @@ esp_err_t HandleCmd(httpd_req_t* req) {
 
 /* ───────── 对外接口 ───────── */
 
-int PetHttpStart(PetCloud* cloud, const char* pin) {
-    if (g_server) {
-        ESP_LOGW(TAG, "HTTP server already running");
-        return 0;
+/* 延迟启动任务：等 TCP/IP 栈就绪后再起 mDNS + httpd。
+ * 直接在 InitializeIot() 里起会因 lwIP 尚未启动而 assert 崩溃
+ * （tcpip_send_msg_wait_sem Invalid mbox）。 */
+static void PetHttpTask(void* arg) {
+    /* 等待 WiFi/TCP-IP 就绪：轮询 netif 是否有 IP，最多等 60 秒 */
+    for (int i = 0; i < 300; i++) {
+        esp_netif_ip_info_t ip;
+        esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
-    g_cloud = cloud;
-    if (pin && pin[0]) {
-        strncpy(g_pin, pin, kMaxPinLen);
-        g_pin[kMaxPinLen] = '\0';
-    }
+
+    /* 额外再等 500ms 让 lwIP 完全稳定 */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    PetCloud* cloud = (PetCloud*)arg;
 
     /* 启动 mDNS */
     esp_err_t err = mdns_init();
@@ -423,7 +434,7 @@ int PetHttpStart(PetCloud* cloud, const char* pin) {
         mdns_service_add("K10-Pet-HTTP", "_http", "_tcp", kPort, nullptr, 0);
         ESP_LOGI(TAG, "mDNS: k10-pet.local");
     } else {
-        ESP_LOGW(TAG, "mdns_init failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "mdns_init failed: %s (HTTP 仍会启动，只是没有 .local 域名)", esp_err_to_name(err));
     }
 
     /* 启动 HTTP server */
@@ -437,7 +448,8 @@ int PetHttpStart(PetCloud* cloud, const char* pin) {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
         g_server = nullptr;
-        return -1;
+        vTaskDelete(nullptr);
+        return;
     }
 
     /* 注册路由 */
@@ -460,6 +472,28 @@ int PetHttpStart(PetCloud* cloud, const char* pin) {
     httpd_register_uri_handler(g_server, &uri_cmd);
 
     ESP_LOGI(TAG, "HTTP dashboard ready: http://k10-pet.local (port %d)", kPort);
+    vTaskDelete(nullptr);  /* 任务完成，自杀 */
+}
+
+int PetHttpStart(PetCloud* cloud, const char* pin) {
+    if (g_server) {
+        ESP_LOGW(TAG, "HTTP server already running");
+        return 0;
+    }
+    g_cloud = cloud;
+    if (pin && pin[0]) {
+        strncpy(g_pin, pin, kMaxPinLen);
+        g_pin[kMaxPinLen] = '\0';
+    }
+
+    /* 不能在这里直接 mdns_init + httpd_start，因为 WiFi/TCP-IP 可能还没起。
+     * 起一个后台任务等网络就绪后再启动。 */
+    ESP_LOGI(TAG, "HTTP server deferred, waiting for WiFi...");
+    BaseType_t ok = xTaskCreate(PetHttpTask, "pet_http", 8192, cloud, 5, nullptr);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create PetHttpTask");
+        return -1;
+    }
     return 0;
 }
 
