@@ -110,32 +110,47 @@ if pos:
        "上方 2 个 + 下方 2 个布局", {"top": top, "bottom": bottom})
 ok("lv_obj_set_width(stat_bars_" in fv, "SetStats 按数值驱动能量条宽度")
 ok("stats_bar_" not in fv, "旧的底部数字栏已移除")
+ok("LV_OPA_80" in fv, "能量条底框提到 80% 不透明度（原 40% 太暗看不见）")
+ok("lv_obj_set_size(track, kW - 6, 12)" in fv, "能量条轨道加高到 12px")
+
+# A-06 修复：SetPetStats 不再被 st.valid 卡住
+board = read(os.path.join(K10, "df_k10_board.cc"))
+ok("SetPetStats" in board, "定时器调用 SetPetStats")
+ok("if (st.valid)" not in board.split("SetPetStats")[0].split("GetStatus")[-1],
+   "SetPetStats 不再要求 st.valid（无条件刷新）")
+
+# A-08/B-01 修复：屏幕弹 IP
+ok("ShowNotification" in board and "IPSTR" in board,
+   "WiFi 连上后屏幕弹出看板 IP 地址")
 
 # ================================================================ A-07
-section("A-07 衰减 1 分钟内可见（常量同步）")
+section("A-07 衰减 30 秒内可见（常量同步）")
 
 cfg = read(os.path.join(K10, "pet_config.h"))
-ok("PET_DECAY_STEP_SEC 60" in cfg, "pet_config.h: PET_DECAY_STEP_SEC=60（1 分钟一步）")
+ok("PET_DECAY_STEP_SEC 30" in cfg, "pet_config.h: PET_DECAY_STEP_SEC=30（30 秒一步）")
 
 pcl = read(os.path.join(K10, "pet_cloud.cc"))
 ok("kDecayStepSec = PET_DECAY_STEP_SEC" in pcl,
    "pet_cloud.cc 衰减步长跟随配置宏")
-ok("kMaxDecaySteps = 1440" in pcl, "pet_cloud.cc 补算封顶 1440 步（24h）")
+ok("kMaxDecaySteps = 2880" in pcl, "pet_cloud.cc 补算封顶 2880 步（24h）")
 
 eng = read(os.path.join(K10, "pet_engine.h"))
-ok("1.0 / 60.0" in eng, "pet_engine.h 默认步长 1 分钟")
-ok("max_decay_steps = 1440" in eng, "pet_engine.h 补算封顶 1440 步")
+ok("1.0 / 120.0" in eng, "pet_engine.h 默认步长 30 秒")
+ok("max_decay_steps = 2880" in eng, "pet_engine.h 补算封顶 2880 步")
 
 js = read(os.path.join(ROOT, "cloud", "scf", "pet-core.js"))
-ok("DECAY_STEP_HOURS: 1 / 60" in js, "pet-core.js 与设备端同步（1 分钟一步）")
-ok("MAX_DECAY_STEPS: 1440" in js, "pet-core.js 补算封顶同步")
+ok("DECAY_STEP_HOURS: 1 / 120" in js, "pet-core.js 与设备端同步（30 秒一步）")
+ok("MAX_DECAY_STEPS: 2880" in js, "pet-core.js 补算封顶同步")
 
-# 数学验证：60 秒一步，一步后饱食 -2
-step_sec = 60
+# 数学验证：30 秒一步，半分钟后饱食 -2（肉眼可见）
+step_sec = 30
 hunger = 60
-for _ in range((120) // step_sec):  # 静置 2 分钟
+for _ in range(1):  # 静置 30 秒（1 步）
     hunger = max(0, hunger - 2)
-ok(hunger == 56, "静置 2 分钟饱食 60→56（每步 -2，肉眼可见）", hunger)
+ok(hunger == 58, "静置 30 秒饱食 60→58（每步 -2，肉眼可见）", hunger)
+for _ in range(1):  # 再 30 秒（累计 2 步 = 1 分钟）
+    hunger = max(0, hunger - 2)
+ok(hunger == 56, "静置 1 分钟饱食 60→56（两步 -4，清晰可见）", hunger)
 
 # ================================================================ A-08 / B-01
 section("A-08 看板连接状态恢复 / B-01 PIN 与并发")
@@ -203,6 +218,8 @@ ok("WatchLightTick" in tools_cc, "PetTools 实现 WatchLightTick")
 ok("sudden_bright" in tools_cc and "sudden_dark" in tools_cc,
    "骤亮/骤暗两种触发条件都有")
 ok("curious" in tools_cc and "sleepy" in tools_cc, "骤亮→好奇脸，骤暗→困倦脸")
+ok("30.0f" in tools_cc and "1.8f" in tools_cc,
+   "阈值已降低到 30 lux / 1.8x（原 120/2.5x 手机手电够不着）")
 board_cc = read(os.path.join(K10, "df_k10_board.cc"))
 ok("WatchLightTick()" in board_cc, "板级 2 秒定时器调用光感看护")
 

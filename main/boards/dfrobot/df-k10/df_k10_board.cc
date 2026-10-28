@@ -21,6 +21,7 @@
 #include <esp_idf_version.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_timer.h>
+#include <esp_netif.h>       /* A-08/B-01: 屏幕弹 IP 用 */
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 
@@ -283,12 +284,29 @@ private:
             targs.callback = [](void* arg) {
                 auto* self = static_cast<Df_K10Board*>(arg);
                 if (self->pet_tools_ == nullptr || self->display_ == nullptr) return;
+                /* A-06 修复：不再要求 st.valid —— 首次开机状态没加载时
+                 * GetStatus() 会返回 valid=false 但带默认值，直接拿来刷栏，
+                 * 否则能量条一直停在初始「--」状态看不出来。 */
                 PetStatus st = self->pet_tools_->cloud().GetStatus();
-                if (st.valid) {
-                    self->display_->SetPetStats(st.hunger, st.mood, st.energy, st.coins);
-                }
+                self->display_->SetPetStats(st.hunger, st.mood, st.energy, st.coins);
                 /* 光感看护（A-15）：手电/遮挡触发表情反馈，顺同一节拍轮询 */
                 self->pet_tools_->WatchLightTick();
+                /* A-08/B-01 修复：WiFi 连上后把看板地址弹一次到屏幕上，
+                 * 手机不用连串口也能知道该输什么地址。 */
+                {
+                    static bool ip_shown = false;
+                    if (!ip_shown) {
+                        esp_netif_t* ni = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+                        esp_netif_ip_info_t ipinfo = {};
+                        if (ni && esp_netif_get_ip_info(ni, &ipinfo) == ESP_OK &&
+                            ipinfo.ip.addr != 0) {
+                            char msg[80];
+                            snprintf(msg, sizeof(msg), "看板: " IPSTR ":%d", IP2STR(&ipinfo.ip), 8080);
+                            self->display_->ShowNotification(msg, 8000);
+                            ip_shown = true;
+                        }
+                    }
+                }
             };
             targs.arg = this;
             targs.dispatch_method = ESP_TIMER_TASK;

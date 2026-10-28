@@ -37,8 +37,8 @@ constexpr int kMaxResponse = 8192;     /* 响应体上限 */
 constexpr int kHttpTimeoutMs = 7000;
 
 /* 数值规则与 pet_engine / 云端 pet-core.js 保持一一对应。改这里必须同步，否则离线/在线切换会分叉。 */
-constexpr int kDecayStepSec = PET_DECAY_STEP_SEC; /* 默认 60s 一步，见 pet_config.h */
-constexpr int kMaxDecaySteps = 1440;     /* 单次最多补算 24 小时（1440×60s） */
+constexpr int kDecayStepSec = PET_DECAY_STEP_SEC; /* 默认 30s 一步，见 pet_config.h */
+constexpr int kMaxDecaySteps = 2880;     /* 单次最多补算 24 小时（2880×30s） */
 constexpr int kSickAfterStarving = 43200;/* 饿到 0 持续 12 小时 → 生病 */
 constexpr int kExpPerAction = 2;
 constexpr int kExpPerLevel = 50;

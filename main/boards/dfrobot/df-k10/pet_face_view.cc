@@ -247,10 +247,11 @@ void PetFaceView::Build(lv_obj_t* parent) {
     for (int i = 0; i < 4; i++) {
         lv_obj_t* box = lv_obj_create(root_);
         lv_obj_remove_style_all(box);
-        lv_obj_set_size(box, kW, 30);
+        lv_obj_set_size(box, kW, 32);
         lv_obj_set_pos(box, kStatPos[i][0], kStatPos[i][1]);
-        lv_obj_set_style_bg_opa(box, LV_OPA_40, 0);
-        lv_obj_set_style_bg_color(box, lv_color_hex(0x1A1210), 0);
+        /* A-06 修复：底框不透明度从 40% 提到 80%，深底上才有轮廓感 */
+        lv_obj_set_style_bg_opa(box, LV_OPA_80, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x2A1E18), 0);
         lv_obj_set_style_radius(box, 8, 0);
         lv_obj_set_style_pad_all(box, 3, 0);
         lv_obj_clear_flag(box, static_cast<lv_obj_flag_t>(
@@ -269,24 +270,24 @@ void PetFaceView::Build(lv_obj_t* parent) {
         lv_obj_set_style_text_font(stat_labels_[i], &lv_font_montserrat_14, 0);
         lv_obj_align(stat_labels_[i], LV_ALIGN_TOP_RIGHT, 0, 0);
 
-        /* 能量条轨道 + 填充 */
+        /* 能量条轨道 + 填充（A-06：轨道从 8px 加高到 12px，更容易看清） */
         lv_obj_t* track = lv_obj_create(box);
         lv_obj_remove_style_all(track);
-        lv_obj_set_size(track, kW - 6, 8);
+        lv_obj_set_size(track, kW - 6, 12);
         lv_obj_set_pos(track, 3, 18);
-        lv_obj_set_style_bg_opa(track, LV_OPA_30, 0);
-        lv_obj_set_style_bg_color(track, lv_color_hex(0x555555), 0);
-        lv_obj_set_style_radius(track, 4, 0);
+        lv_obj_set_style_bg_opa(track, LV_OPA_50, 0);
+        lv_obj_set_style_bg_color(track, lv_color_hex(0x444444), 0);
+        lv_obj_set_style_radius(track, 6, 0);
         lv_obj_clear_flag(track, static_cast<lv_obj_flag_t>(
                                     LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
 
         stat_bars_[i] = lv_obj_create(track);
         lv_obj_remove_style_all(stat_bars_[i]);
-        lv_obj_set_size(stat_bars_[i], 4, 8);
+        lv_obj_set_size(stat_bars_[i], 4, 12);
         lv_obj_set_pos(stat_bars_[i], 0, 0);
         lv_obj_set_style_bg_opa(stat_bars_[i], LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(stat_bars_[i], kStatColors[i], 0);
-        lv_obj_set_style_radius(stat_bars_[i], 4, 0);
+        lv_obj_set_style_radius(stat_bars_[i], 6, 0);
         lv_obj_clear_flag(stat_bars_[i], static_cast<lv_obj_flag_t>(
                                              LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
     }

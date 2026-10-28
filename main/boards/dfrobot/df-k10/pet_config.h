@@ -116,7 +116,7 @@
  * 注意：pet_engine.h 的 decay_step_hours、pet_cloud.cc 的 kDecayStepSec
  * 都按本宏换算，改一处即可全生效；云端 pet-core.js 的 DEFAULTS 要同步。
  */
-#define PET_DECAY_STEP_SEC 60
+#define PET_DECAY_STEP_SEC 30
 
 /*
  * 光感被动看护：每隔约 2 秒读一次照度，遇到骤亮（手电照额头）→ 好奇表情，

@@ -167,10 +167,11 @@ void PetTools::WatchLightTick() {
         return;
     }
     if (light_valid_ && display_ != nullptr) {
-        /* 骤亮：手电照额头（比上一次亮 2.5 倍以上且绝对值够大） */
-        bool sudden_bright = lux > 120.0f && lux > last_lux_ * 2.5f + 40.0f;
+        /* 骤亮：手电照额头（A-15 修复：阈值从 120/2.5x 降到 30/1.8x，
+         * 手机手电筒照传感器大约能到 50~200 lux，原阈值太高够不着） */
+        bool sudden_bright = lux > 30.0f && lux > last_lux_ * 1.8f + 10.0f;
         /* 骤暗：遮挡光感孔 */
-        bool sudden_dark = last_lux_ > 120.0f && lux * 2.5f + 40.0f < last_lux_;
+        bool sudden_dark = last_lux_ > 30.0f && lux * 1.8f + 10.0f < last_lux_;
         if (sudden_bright) {
             display_->SetPetFace("curious");
             ESP_LOGI(TAG, "PET_PATCH: light jump %.0f -> %.0f lux -> curious", last_lux_,

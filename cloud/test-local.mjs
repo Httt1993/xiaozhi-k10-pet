@@ -77,39 +77,39 @@ ok(typeof r.say === 'string' && r.say.length > 0, '没有动作时也有一句�
 let state = r.state;
 
 // ==================================================================== 2. 时间衰减
-section('2. 时间衰减（关机也照饿 · 默认 1 分钟一步，A-07）');
+section('2. 时间衰减（关机也照饿 · 默认 30 秒一步，A-07）');
 
-/* 本节显式用「1 分钟一步」档 = 设备端 PET_DECAY_STEP_SEC=60 的默认值 */
-const FAST_DECAY = { PET_DECAY_STEP_HOURS: 1 / 60, PET_MAX_DECAY_STEPS: 1440 };
+/* 本节显式用「30 秒一步」档 = 设备端 PET_DECAY_STEP_SEC=30 的默认值 */
+const FAST_DECAY = { PET_DECAY_STEP_HOURS: 1 / 120, PET_MAX_DECAY_STEPS: 2880 };
 
-// 把 lastDecay 拨回 2 分钟前（默认 1 分钟一步）
+// 把 lastDecay 拨回 1 分钟前（默认 30 秒一步 = 2 步）
 let s = JSON.parse(JSON.stringify(state));
-s.pet.lastDecay = t0 - 120;
+s.pet.lastDecay = t0 - 60;
 r = call('sync', s, {}, t0, FAST_DECAY);
-eq(r.decay_steps, 2, '2 分钟 = 2 步（每 1 分钟一步）');
+eq(r.decay_steps, 2, '1 分钟 = 2 步（每 30 秒一步）');
 eq(r.status.hunger, 56, '饱食 60 → 56（每步 -2）');
 eq(r.status.energy, 78, '精力 80 → 78（每步 -1）');
 eq(r.status.mood, 78, '心情 80 → 78（每步 -1）');
 
-// 验收点：静置 1 分钟内要能看到衰减（A-07）
+// 验收点：静置 30 秒内要能看到衰减（A-07）
 s = JSON.parse(JSON.stringify(state));
-s.pet.lastDecay = t0 - 60;
+s.pet.lastDecay = t0 - 30;
 r = call('sync', s, {}, t0, FAST_DECAY);
 ok((r.decay_steps || 0) >= 1 && r.status.hunger < 60,
-   '1 分钟内衰减肉眼可见（饱食下降）', { steps: r.decay_steps, hunger: r.status.hunger });
+   '30 秒内衰减肉眼可见（饱食下降）', { steps: r.decay_steps, hunger: r.status.hunger });
 
 // 24 小时以上的封顶
 s = JSON.parse(JSON.stringify(state));
 s.pet.lastDecay = t0 - 100 * 3600;
 r = call('sync', s, {}, t0, FAST_DECAY);
-eq(r.decay_steps, 1440, '超过 24 小时封顶为 1440 步，不会一次清零');
+eq(r.decay_steps, 2880, '超过 24 小时封顶为 2880 步，不会一次清零');
 
-// 余数不丢：150 秒只走 2 步，但 lastDecay 只推进 120 秒
+// 余数不丢：70 秒只走 2 步（60 秒），lastDecay 只推进 60 秒
 s = JSON.parse(JSON.stringify(state));
-s.pet.lastDecay = t0 - 150;
+s.pet.lastDecay = t0 - 70;
 r = call('sync', s, {}, t0, FAST_DECAY);
-eq(r.decay_steps, 2, '150 秒走 2 步');
-eq(r.state.pet.lastDecay, t0 - 150 + 120, 'lastDecay 只推进整步，余数保留');
+eq(r.decay_steps, 2, '70 秒走 2 步（余 10 秒不算）');
+eq(r.state.pet.lastDecay, t0 - 70 + 60, 'lastDecay 只推进整步，余数保留');
 
 // ==================================================================== 3. 喂食
 section('3. 喂食');
@@ -298,9 +298,9 @@ ok(Math.abs(r.skew_sec + 3 * 3600) <= 2, '上报时钟偏差（服务器 - 设�
 ok((r.decay_steps || 0) === 0, '偏差超过 5 分钟时改用服务器时间，不会误算 180 步衰减');
 
 // 偏差在 5 分钟内时信任设备时间
-r = core.run({ action: 'sync', state: s, args: {}, ts: t0 + 30 }, {});
-ok(Math.abs(r.skew_sec + 30) <= 2, '小偏差照常上报', r.skew_sec);
-eq(r.decay_steps, undefined, '偏差 30 秒不足以走一步衰减');
+r = core.run({ action: 'sync', state: s, args: {}, ts: t0 + 15 }, {});
+ok(Math.abs(r.skew_sec + 15) <= 2, '小偏差照常上报', r.skew_sec);
+eq(r.decay_steps, undefined, '偏差 15 秒不足以走一步衰减（步长 30 秒）');
 
 // ==================================================================== 8. 状态体积
 section('8. 状态体积（要装进 NVS）');
