@@ -7,6 +7,7 @@
   A-04 状态机 audio_testing → activating/idle 合法转移
   A-06 底部一排（小鱼干/爱心状态机 + 电池 + 金币数字，无中文标签）
   任务删除 task_delete + 未完成任务角标 + 图标状态机/饥饿抖动（10-28 新增）
+  爱心像素心重绘 + 取消 WiFi/时间状态栏（10-28 二轮 UI 修正）
   A-07 衰减 1 分钟内可见（三处常量同步）
   A-08 看板连接状态恢复 + 并发客户端
   A-11/A-12 看板动作触发设备联动 + action UAF 修复
@@ -169,6 +170,23 @@ ok("fish_[0]" in fv and "fish_[1]" in fv and "fish_[2]" in fv,
 ok("heart_[0]" in fv and "heart_[1]" in fv and "heart_[2]" in fv,
    "三颗爱心图元（实心/空心/裂纹）")
 ok("kCrack" in fv, "裂心纹颜色常量")
+
+# 10-28 二轮 UI 修正：爱心换真·心形像素画
+ok("HRun" in fv and "drawHeart" in fv, "爱心改用像素心 run-length 描绘（不再是圆角方块拼的）")
+ok("kBody" in fv and "kHole" in fv and "kCracks" in fv,
+   "像素心三套 run 数据（外形 13×11 / 内腔 / 裂纹）")
+ok("{0, 0, 2, 4}" in fv and "{10, 10, 6, 6}" in fv,
+   "心形剪影：两叶圆顶 + 对称收尖底（经典心尖）")
+ok("2 + runs[i].x0 * 2" in fv, "位图像素放大 2 倍画 2×2 色块（像素风）")
+
+# 10-28 二轮 UI 修正：取消 WiFi/时间状态栏
+lcd = read(os.path.join(ROOT, "main", "display", "lcd_display.cc"))
+ok("取消 WiFi/时间状态栏" in lcd and lcd.count("lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN)") == 2,
+   "两个 SetupUI 变体都隐藏 top_bar_（WiFi/静音/电池图标条）")
+lvgl = read(os.path.join(ROOT, "main", "display", "lvgl_display", "lvgl_display.cc"))
+ok("strftime" not in lvgl, "HH:MM 时间显示代码已删除")
+ok("取消时间显示" in lvgl and "lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN)" in lvgl,
+   "空闲时隐藏状态文字，屏幕只留猫脸；交互时 SetStatus 仍显示状态")
 
 # A-06 修复：SetPetStats 不再被 st.valid 卡住
 board = read(os.path.join(K10, "df_k10_board.cc"))

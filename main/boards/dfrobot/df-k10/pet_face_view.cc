@@ -328,24 +328,53 @@ void PetFaceView::Build(lv_obj_t* parent) {
                                              LV_OBJ_FLAG_CLICKABLE));
             lv_obj_add_flag(heart_[i], LV_OBJ_FLAG_HIDDEN);
         }
-        /* 实心：两叶 + 底 */
-        mk(heart_[0], 0, 2, 12, 12, kPink, 6);
-        mk(heart_[0], 11, 2, 12, 12, kPink, 6);
-        mk(heart_[0], 0, 8, 23, 11, kPink, 5);
-        /* 空心：外轮廓 + 内底色挖空 */
-        mk(heart_[1], 0, 2, 12, 12, kPink, 6);
-        mk(heart_[1], 11, 2, 12, 12, kPink, 6);
-        mk(heart_[1], 0, 8, 23, 11, kPink, 5);
-        mk(heart_[1], 3, 5, 7, 7, kBarBg, 4);
-        mk(heart_[1], 12, 5, 7, 7, kBarBg, 4);
-        mk(heart_[1], 4, 11, 14, 5, kBarBg, 3);
-        /* 裂开：实心 + 三道锯齿裂纹 */
-        mk(heart_[2], 0, 2, 12, 12, kPink, 6);
-        mk(heart_[2], 11, 2, 12, 12, kPink, 6);
-        mk(heart_[2], 0, 8, 23, 11, kPink, 5);
-        mk(heart_[2], 13, 3, 2, 7, kCrack, 0);
-        mk(heart_[2], 10, 9, 2, 6, kCrack, 0);
-        mk(heart_[2], 13, 14, 2, 6, kCrack, 0);
+        /* 像素心 run-length 描绘：每段 {y0,y1,x0,x1} 是心形位图里的横段，
+         * 放大 2 倍画成色块（1 位图像素 = 2×2 屏幕像素），圆角 0 = 像素风 */
+        struct HRun { uint8_t y0, y1, x0, x1; };
+        auto drawHeart = [&](lv_obj_t* parent, const HRun* runs, int n, lv_color_t c) {
+            for (int i = 0; i < n; i++) {
+                mk(parent,
+                   2 + runs[i].x0 * 2, runs[i].y0 * 2,
+                   (runs[i].x1 - runs[i].x0 + 1) * 2,
+                   (runs[i].y1 - runs[i].y0 + 1) * 2,
+                   c, 0);
+            }
+        };
+        /* 外形 13×11：两叶圆顶 + 对称收尖底，经典心形剪影 */
+        static const HRun kBody[] = {
+            {0, 0, 2, 4}, {0, 0, 8, 10},   /* 两叶圆顶 */
+            {1, 1, 1, 11},
+            {2, 4, 0, 12},                 /* 宽肩 */
+            {5, 5, 1, 11},
+            {6, 6, 2, 10},
+            {7, 7, 3, 9},
+            {8, 8, 4, 8},
+            {9, 9, 5, 7},
+            {10, 10, 6, 6},                /* 心尖 */
+        };
+        /* 内腔（剪影内全部实心像素）：挖成心形空洞 → 空心 */
+        static const HRun kHole[] = {
+            {1, 1, 2, 4}, {1, 1, 8, 10},
+            {2, 4, 1, 11},
+            {5, 5, 2, 10},
+            {6, 6, 3, 9},
+            {7, 7, 4, 8},
+            {8, 8, 5, 7},
+            {9, 9, 6, 6},
+        };
+        /* 裂纹：从两叶谷底到心尖的锯齿闪电线 */
+        static const HRun kCracks[] = {
+            {1, 3, 6, 6},
+            {4, 5, 5, 5},
+            {6, 7, 7, 7},
+            {8, 9, 5, 5},
+            {10, 10, 6, 6},
+        };
+        drawHeart(heart_[0], kBody, sizeof(kBody) / sizeof(HRun), kPink);   /* 实心 */
+        drawHeart(heart_[1], kBody, sizeof(kBody) / sizeof(HRun), kPink);   /* 空心 */
+        drawHeart(heart_[1], kHole, sizeof(kHole) / sizeof(HRun), kBarBg);
+        drawHeart(heart_[2], kBody, sizeof(kBody) / sizeof(HRun), kPink);   /* 裂开 */
+        drawHeart(heart_[2], kCracks, sizeof(kCracks) / sizeof(HRun), kCrack);
 
         /* 格 3 精力电池：壳 + 小帽 + 电量填充 */
         lv_obj_t* shell = mk(bar, 122, 13, 30, 15, kGreen, 4);

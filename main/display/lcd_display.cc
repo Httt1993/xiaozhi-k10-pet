@@ -452,6 +452,9 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_flex_align(top_bar_, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
+    /* PET_PATCH: 取消 WiFi/时间状态栏 —— 整条顶栏隐藏（WiFi/静音/电池图标）。
+     * 电池已在底部宠物状态排显示，时间不再上屏，屏幕只留猫脸。 */
+    lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN);
 
     // Left icon
     network_label_ = lv_label_create(top_bar_);
@@ -957,6 +960,8 @@ void LcdDisplay::SetupUI() {
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(top_bar_, LV_ALIGN_TOP_MID, 0, 0);
+    /* PET_PATCH: 取消 WiFi/时间状态栏 —— 整条顶栏隐藏（WiFi/静音/电池图标） */
+    lv_obj_add_flag(top_bar_, LV_OBJ_FLAG_HIDDEN);
 
     // Left icon
     network_label_ = lv_label_create(top_bar_);

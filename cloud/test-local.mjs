@@ -360,7 +360,9 @@ ok(
 
 // 11b. 已在线设备（带 state）也能照常送达，且不误判冷启动
 const warmState = dr.out.state;
-const at2 = Date.now();
+// at 必须严格递增：同一毫秒的 at2 会被 cmdAck 水位线（at <= ack 即去重）误判成重复提交。
+// 人手点两下不会同毫秒，这里强制 at2 = at1+1 消除测试抖动；不去动生产去重语义。
+const at2 = Math.max(Date.now(), at1 + 1);
 store.pushPending(env, 'task_publish', { title: '倒垃圾', reward: 5 }, '家长布置', at2);
 dr = scf.deviceSync(env, { action: 'sync', state: warmState }, Math.floor(Date.now() / 1000));
 const warmTasks = dr.out.state.tasks || [];

@@ -213,24 +213,18 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update time — show HH:MM when idle; refresh immediately on state
-    // transitions (update_all=true) and on every minute change thereafter.
+    // PET_PATCH: 取消时间显示（配合取消 WiFi/时间状态栏）。
+    // 空闲时把状态文字一并藏起来，屏幕上只留猫脸；
+    // 交互（聆听/说话/配网…）时 SetStatus 会重新显示状态文字。
     if (app.GetDeviceState() == kDeviceStateIdle) {
-        time_t now = time(NULL);
-        struct tm* tm_now = localtime(&now);
-        if (tm_now->tm_year >= 2025 - 1900) {
-            int cur_min = tm_now->tm_hour * 60 + tm_now->tm_min;
-            if (update_all || cur_min != last_displayed_clock_min_) {
-                last_displayed_clock_min_ = cur_min;
-                char time_str[16];
-                strftime(time_str, sizeof(time_str), "%H:%M", tm_now);
-                SetStatus(time_str);
-            }
-        } else {
-            ESP_LOGW(TAG, "System time not set (tm_year=%d)", tm_now->tm_year);
+        DisplayLockGuard lock(this);
+        if (status_label_ != nullptr) {
+            lv_label_set_text(status_label_, "");
+            lv_obj_add_flag(status_label_, LV_OBJ_FLAG_HIDDEN);
         }
+        last_displayed_clock_min_ = -1;
     } else {
-        // Reset so the clock re-appears immediately when idle resumes.
+        // Reset so status text re-appears immediately when idle resumes.
         last_displayed_clock_min_ = -1;
     }
 
