@@ -754,7 +754,7 @@ void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
 
     /* 心情：爱心亮度（满=亮 / 半=半亮 / 低=暗） */
     const lv_opa_t hopa = (mood >= 70) ? LV_OPA_COVER
-                                       : (mood >= 30 ? LV_OPA_75 : LV_OPA_50);
+                                       : (mood >= 30 ? LV_OPA_70 : LV_OPA_50);
     lv_obj_set_style_opa(stat_heart_grp_, hopa, 0);
 
     /* 精力：电池电量 2~24px */
