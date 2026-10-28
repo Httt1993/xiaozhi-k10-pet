@@ -5,7 +5,7 @@
 
 覆盖：
   A-04 状态机 audio_testing → activating/idle 合法转移
-  A-06 属性栏能量条（上2下2）
+  A-06 底部一排四件宝（碗/心/电池/金币数字，无中文标签）
   A-07 衰减 1 分钟内可见（三处常量同步）
   A-08 看板连接状态恢复 + 并发客户端
   A-11/A-12 看板动作触发设备联动 + action UAF 修复
@@ -93,25 +93,26 @@ ok("Unexpected state" in app and "forcing Activating" in app,
    "网络连上时若卡在 audio_testing 会强制转入 activating")
 
 # ================================================================ A-06
-section("A-06 属性栏能量条（上 2 下 2）")
+section("A-06 底部一排四件宝（碗/心/电池/金币数字）")
 
 fv = read(os.path.join(K10, "pet_face_view.cc"))
 fvh = read(os.path.join(K10, "pet_face_view.h"))
-ok("stat_bars_" in fvh, "头文件声明能量条填充对象 stat_bars_")
-ok("kStatPos" in fv, "四个能量条有独立锚点（上2下2）")
-pos = re.search(r"kStatPos\[4\]\[2\] = \{(.*?)\};", fv, re.S)
-ok(pos is not None, "找到锚点表")
-if pos:
-    pairs = re.findall(r"\{(\d+),\s*(\d+)\}", pos.group(1))
-    ok(len(pairs) == 4, f"锚点 4 个（实得 {len(pairs)}）", pairs)
-    top = [p for p in pairs if int(p[1]) < 100]
-    bottom = [p for p in pairs if int(p[1]) >= 250]
-    ok(len(top) == 2 and len(bottom) == 2,
-       "上方 2 个 + 下方 2 个布局", {"top": top, "bottom": bottom})
-ok("lv_obj_set_width(stat_bars_" in fv, "SetStats 按数值驱动能量条宽度")
-ok("stats_bar_" not in fv, "旧的底部数字栏已移除")
-ok("LV_OPA_80" in fv, "能量条底框提到 80% 不透明度（原 40% 太暗看不见）")
-ok("lv_obj_set_size(track, kW - 6, 12)" in fv, "能量条轨道加高到 12px")
+ok("stat_rice_" in fvh and "stat_heart_grp_" in fvh and "stat_batt_" in fvh,
+   "头文件声明米饭/爱心/电池填充对象")
+ok("stat_coins_lbl_" in fvh, "金币用一个数字标签")
+ok("stat_bars_" not in fvh and "stat_labels_" not in fvh,
+   "旧能量条/数字标签成员已移除")
+ok("stat_bars_" not in fv and "kStatPos" not in fv,
+   "旧的四角能量条布局已移除")
+ok("stat_labels_" not in fv, "旧数字标签代码已移除")
+ok("232, 40" in fv and "4, 276" in fv,
+   "参数条沉到屏幕最底部一行（y=276，不遮脸）")
+ok("lv_obj_set_size(stat_rice_" in fv, "SetStats 驱动米饭高度")
+ok("stat_heart_grp_" in fv and "LV_OPA_COVER" in fv, "SetStats 驱动爱心亮度")
+ok("lv_obj_set_width(stat_batt_" in fv, "SetStats 驱动电池电量宽度")
+ok("lv_label_set_text(stat_coins_lbl_" in fv, "金币只显数字")
+ok("stat_tear_" in fv and "stat_star_" in fv, "低状态小泪滴/高状态小星星")
+ok("kStatNames" not in fv, "屏幕不带中文标签")
 
 # A-06 修复：SetPetStats 不再被 st.valid 卡住
 board = read(os.path.join(K10, "df_k10_board.cc"))

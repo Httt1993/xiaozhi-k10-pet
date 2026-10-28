@@ -129,9 +129,13 @@ private:
     /* 腮红叠层（呼吸透明度 + 情绪加深） */
     lv_obj_t* blush_[2] = {nullptr, nullptr};
 
-    /* 属性能量条：上 2（饱食/心情）+ 下 2（精力/金币），A-06 */
-    lv_obj_t* stat_bars_[4] = {nullptr, nullptr, nullptr, nullptr};
-    lv_obj_t* stat_labels_[4] = {nullptr, nullptr, nullptr, nullptr};
+    /* 童趣可视化：底部一排四件宝（碗/心/电池/金币数字），无文字标签 */
+    lv_obj_t* stat_rice_ = nullptr;       /* 饱食：米饭高度 */
+    lv_obj_t* stat_heart_grp_ = nullptr;  /* 心情：爱心组（透明度） */
+    lv_obj_t* stat_batt_ = nullptr;       /* 精力：电池填充 */
+    lv_obj_t* stat_coins_lbl_ = nullptr;  /* 金币：只显数字 */
+    lv_obj_t* stat_tear_[4] = {nullptr, nullptr, nullptr, nullptr};
+    lv_obj_t* stat_star_[4] = {nullptr, nullptr, nullptr, nullptr};
 
     lv_timer_t* timer_ = nullptr;
 

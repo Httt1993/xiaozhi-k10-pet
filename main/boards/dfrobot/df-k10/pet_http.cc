@@ -131,12 +131,14 @@ h1{text-align:center;font-size:20px;padding:16px 0 8px}
 .card{background:#fff;border-radius:16px;padding:16px;margin-bottom:12px;
 box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .pet-face{text-align:center;font-size:64px;padding:8px 0}
-.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.stat{background:#faf6f1;border-radius:10px;padding:10px;text-align:center}
-.stat .label{font-size:12px;color:#a08060}
-.stat .value{font-size:22px;font-weight:700;margin-top:2px}
-.bar{height:6px;background:#eee;border-radius:3px;margin-top:4px;overflow:hidden}
-.bar .fill{height:100%;border-radius:3px;transition:width .5s}
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.stat{background:#faf6f1;border-radius:12px;padding:8px 4px;text-align:center}
+.stat .ico{font-size:28px;line-height:1.3}
+.stat .label{font-size:11px;color:#a08060;margin-top:2px}
+.stat .value{font-size:13px;font-weight:600;color:#806030}
+.stat .value.big{font-size:26px;color:#ba7517;margin-top:6px}
+.bar{height:8px;background:#eee;border-radius:4px;margin:6px 2px 2px;overflow:hidden}
+.bar .fill{height:100%;border-radius:4px;transition:width .5s}
 .say-box{background:#fff8e8;border-radius:10px;padding:10px;font-size:14px;
 margin-top:10px;min-height:36px;color:#806030}
 .btn-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
@@ -178,14 +180,19 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 <h1>🐱 AI-Buddy</h1>
 <div class="card">
 <div class="pet-face" id="face">😺</div>
-<div class="stat-grid">
-<div class="stat"><div class="label">饱食</div><div class="value" id="v-hunger">-</div>
-<div class="bar"><div class="fill" id="b-hunger" style="background:#e89b4b"></div></div></div>
-<div class="stat"><div class="label">心情</div><div class="value" id="v-mood">-</div>
-<div class="bar"><div class="fill" id="b-mood" style="background:#e88080"></div></div></div>
-<div class="stat"><div class="label">精力</div><div class="value" id="v-energy">-</div>
-<div class="bar"><div class="fill" id="b-energy" style="background:#6bb5e8"></div></div></div>
-<div class="stat"><div class="label">金币</div><div class="value" id="v-coins">-</div></div>
+<div class="stat-row">
+<div class="stat"><div class="ico">🍚</div>
+<div class="bar"><div class="fill" id="b-hunger" style="background:#e89b4b"></div></div>
+<div class="label">饱饱 <span class="value" id="v-hunger">-</span></div></div>
+<div class="stat"><div class="ico">💗</div>
+<div class="bar"><div class="fill" id="b-mood" style="background:#e88080"></div></div>
+<div class="label">开心 <span class="value" id="v-mood">-</span></div></div>
+<div class="stat"><div class="ico">🔋</div>
+<div class="bar"><div class="fill" id="b-energy" style="background:#6bb5e8"></div></div>
+<div class="label">活力 <span class="value" id="v-energy">-</span></div></div>
+<div class="stat"><div class="ico">🪙</div>
+<div class="value big" id="v-coins">-</div>
+<div class="label">金币</div></div>
 </div>
 <div class="say-box" id="say">加载中…</div>
 </div>
