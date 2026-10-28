@@ -116,6 +116,13 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
      */
     cloud_.SetActionHook([this](const PetActionResult& r, const std::string& action) {
         ReactToEvents(r);
+        /* 任务变动即时刷未完成角标（不等 2s 定时器），与看板删除/发布保持同步 */
+        if (display_ != nullptr &&
+            (action == "task_publish" || action == "task_delete" ||
+             action == "task_approve" || action == "task_reject" ||
+             action == "task_submit")) {
+            display_->SetTaskBadge(cloud_.CountOpenTasks());
+        }
         /* 状态已变，30 秒缓存作废，下次问状态重新同步 */
         last_status_ms_ = 0;
 

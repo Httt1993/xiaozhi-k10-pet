@@ -74,7 +74,7 @@ public:
      * action 与云端 pet-core.js 的 run() 完全一致：
      *   sync / feed / medicine / play / heal / sleep / story / song / teach /
      *   pet / chat / task_list / task_submit / task_publish / task_approve /
-     *   task_reject / coins / reset
+     *   task_reject / task_delete / coins / reset
      * args_json 形如 {"food":"苹果"}，可为 nullptr。
      */
     PetActionResult Act(const std::string& action, const std::string& args_json);
@@ -91,8 +91,11 @@ public:
     /** 任务清单的人话版，直接给模型 */
     std::string TaskListText(bool include_done = false);
 
-    /** 任务清单的 JSON 数组字符串（家长看板用），如 [{"title":"写作业","reward":10,"status":"pending"},...] */
+    /** 任务清单的 JSON 数组字符串（家长看板用），如 [{"id":"t1","title":"写作业","reward":10,"status":"pending"},...] */
     std::string GetTasksJson(bool include_done = false);
+
+    /** 未完成任务数（pending+submitted），设备屏角标用；只读本地 state，不发网络请求 */
+    int CountOpenTasks();
 
     /**
      * 启动后台心跳：每 interval_sec 秒静默 sync 一次，把家长看板排队的指令取回来。

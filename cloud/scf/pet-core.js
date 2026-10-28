@@ -660,6 +660,26 @@ function rejectTask(doc, cfg, ts, taskId, title) {
   return { ok: true, kind: 'task_reject', say: `「${t.title}」先退回，让孩子再检查一下。` };
 }
 
+/** 家长删除任务（误发/作废）。按 id 精确删，找不到再按标题模糊删。 */
+function deleteTask(doc, cfg, ts, taskId, title) {
+  void cfg; void ts;
+  let t = null;
+  if (taskId) t = doc.tasks.find((x) => x.id === taskId);
+  if (!t && title) {
+    t = doc.tasks.find((x) => norm(x.title) === norm(title)) ||
+        doc.tasks.find((x) => norm(x.title).includes(norm(title)));
+  }
+  if (!t) return { ok: false, code: 'NOT_FOUND', say: '没找到这个任务。' };
+  const idx = doc.tasks.indexOf(t);
+  doc.tasks.splice(idx, 1);
+  return {
+    ok: true,
+    kind: 'task_delete',
+    say: `好啦，任务「${t.title}」已经删掉了。`,
+    task: { id: t.id, title: t.title },
+  };
+}
+
 // ------------------------------------------------------------------ 状态裁剪
 
 /**
@@ -712,7 +732,7 @@ function trimState(doc, cfg) {
  *
  * @param {object} req {
  *   action: string,      // sync / feed / play / heal / medicine / sleep / story / song /
- *                        // teach / pet / chat / task_list / task_submit / task_publish /
+ *                        // teach / pet / chat / task_list / task_submit / task_publish / task_delete /
  *                        // task_approve / task_reject / coins / reset / ping
  *   state: object|null,  // 设备带来的完整状态；null = 首次，自动初始化
  *   args: object,        // 动作参数：food / title / reward / topic / what / task_id ...
@@ -811,6 +831,9 @@ function run(req, env) {
       break;
     case 'task_reject':
       res = rejectTask(doc, cfg, ts, args.task_id, args.title);
+      break;
+    case 'task_delete':
+      res = deleteTask(doc, cfg, ts, args.task_id, args.title);
       break;
     case 'coins':
       res = { ok: true, code: 'COINS', say: `我现在有 ${doc.pet.coins} 枚游戏币。`, coins: doc.pet.coins };

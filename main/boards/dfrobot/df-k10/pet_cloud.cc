@@ -955,6 +955,7 @@ std::string PetCloud::GetTasksJson(bool include_done) {
                 continue;
             }
             cJSON* item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "id", GetStr(it, "id", ""));
             cJSON_AddStringToObject(item, "title", GetStr(it, "title", ""));
             cJSON_AddNumberToObject(item, "reward", GetInt(it, "reward", 0));
             cJSON_AddStringToObject(item, "status", status);
@@ -967,4 +968,28 @@ std::string PetCloud::GetTasksJson(bool include_done) {
     cJSON_Delete(result);
     cJSON_Delete(root);
     return out;
+}
+
+int PetCloud::CountOpenTasks() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_json_.empty()) {
+        return 0;
+    }
+    cJSON* root = cJSON_Parse(state_json_.c_str());
+    if (root == nullptr) {
+        return 0;
+    }
+    int n = 0;
+    cJSON* tasks = cJSON_GetObjectItem(root, "tasks");
+    if (cJSON_IsArray(tasks)) {
+        cJSON* it = nullptr;
+        cJSON_ArrayForEach(it, tasks) {
+            const char* st = GetStr(it, "status", "");
+            if (strcmp(st, "done") != 0) {
+                n++;
+            }
+        }
+    }
+    cJSON_Delete(root);
+    return n;
 }

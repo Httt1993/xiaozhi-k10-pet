@@ -904,6 +904,50 @@ cJSON* RejectTask(cJSON* doc, int64_t ts, const char* taskId, const char* title)
     return r;
 }
 
+/* 家长删除任务（误发/作废）。按 id 精确删，找不到再按标题模糊删。 */
+cJSON* DeleteTask(cJSON* doc, const char* taskId, const char* title) {
+    cJSON* tasks = JGet(doc, "tasks");
+    int n = cJSON_GetArraySize(tasks);
+    cJSON* t = nullptr;
+    int idx = -1;
+    if (taskId && *taskId) {
+        for (int i = 0; i < n; i++) {
+            if (strcmp(JStr(cJSON_GetArrayItem(tasks, i), "id", ""), taskId) == 0) {
+                t = cJSON_GetArrayItem(tasks, i);
+                idx = i;
+                break;
+            }
+        }
+    }
+    if (!t && title && *title) {
+        std::string nt = Norm(title);
+        for (int i = 0; i < n; i++) {
+            cJSON* x = cJSON_GetArrayItem(tasks, i);
+            if (Norm(JStr(x, "title", "")) == nt) { t = x; idx = i; break; }
+        }
+        if (!t) {
+            for (int i = 0; i < n; i++) {
+                cJSON* x = cJSON_GetArrayItem(tasks, i);
+                if (Norm(JStr(x, "title", "")).find(nt) != std::string::npos) { t = x; idx = i; break; }
+            }
+        }
+    }
+    if (!t || idx < 0) return Err("NOT_FOUND", "没找到这个任务。");
+
+    char id_buf[48] = {0};
+    snprintf(id_buf, sizeof id_buf, "%s", JStr(t, "id", ""));
+    std::string title_s = JStr(t, "title", "");
+    cJSON_DeleteItemFromArray(tasks, idx);
+
+    cJSON* r = Ok("task_delete");
+    cJSON_AddStringToObject(r, "say", (std::string("好啦，任务「") + title_s + "」已经删掉了。").c_str());
+    cJSON* task = cJSON_CreateObject();
+    cJSON_AddItemToObject(r, "task", task);
+    cJSON_AddStringToObject(task, "id", id_buf);
+    cJSON_AddStringToObject(task, "title", title_s.c_str());
+    return r;
+}
+
 /* ============================ 状态裁剪（对应 trimState） ============================ */
 
 void TrimState(cJSON* doc, const Config& cfg) {
@@ -1142,6 +1186,8 @@ bool Run(const char* state_json, const char* action, const char* args_json,
             res = ApproveTask(doc, cfg, ts, AStr("task_id"), AStr("title"));
         } else if (act == "task_reject") {
             res = RejectTask(doc, ts, AStr("task_id"), AStr("title"));
+        } else if (act == "task_delete") {
+            res = DeleteTask(doc, AStr("task_id"), AStr("title"));
         } else if (act == "coins") {
             res = Ok(nullptr);
             cJSON_AddStringToObject(res, "code", "COINS");

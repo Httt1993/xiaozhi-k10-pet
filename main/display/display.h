@@ -71,6 +71,10 @@ public:
     virtual void SetPetStats(int hunger, int mood, int energy, int coins) {
         (void)hunger; (void)mood; (void)energy; (void)coins;
     }
+    /* PET_PATCH: 未完成任务角标（0=隐藏；>0 屏幕右上角显示剪贴板+数字） */
+    virtual void SetTaskBadge(int count) {
+        (void)count;
+    }
     virtual bool InsertAnimDialog(const char* name, uint32_t duration_ms) {
         (void)name;
         (void)duration_ms;

@@ -75,6 +75,7 @@ public:
     const char* PetFaceList() override;
     /* PET_PATCH: 更新底部属性栏 */
     void SetPetStats(int hunger, int mood, int energy, int coins) override;
+    void SetTaskBadge(int count) override;
 };
 
 // SPI LCD display

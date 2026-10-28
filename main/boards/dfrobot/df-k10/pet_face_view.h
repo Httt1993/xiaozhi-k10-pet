@@ -129,13 +129,48 @@ private:
     /* 腮红叠层（呼吸透明度 + 情绪加深） */
     lv_obj_t* blush_[2] = {nullptr, nullptr};
 
-    /* 童趣可视化：底部一排四件宝（碗/心/电池/金币数字），无文字标签 */
-    lv_obj_t* stat_rice_ = nullptr;       /* 饱食：米饭高度 */
-    lv_obj_t* stat_heart_grp_ = nullptr;  /* 心情：爱心组（透明度） */
+    /* ── 图标状态机：小鱼干三态（饱食）+ 爱心三态（心情） ─────────────
+     * satiety(0-100) → FishIconState；mood(0-100) → HeartIconState。
+     * 每态一组 LVGL 图元容器，切换 = 显隐，无需重绘。
+     * 饱食 <30（kSkeleton 档）时小鱼干做轻微水平抖动，提示“饿了”。 */
+   public:
+    enum class FishIconState { kWhole = 0, kBitten = 1, kSkeleton = 2 };
+    enum class HeartIconState { kSolid = 0, kHollow = 1, kCracked = 2 };
+    static FishIconState FishStateFromSatiety(int satiety) {
+        if (satiety >= 60) return FishIconState::kWhole;
+        if (satiety >= 30) return FishIconState::kBitten;
+        return FishIconState::kSkeleton;
+    }
+    static HeartIconState HeartStateFromMood(int mood) {
+        if (mood >= 60) return HeartIconState::kSolid;
+        if (mood >= 30) return HeartIconState::kHollow;
+        return HeartIconState::kCracked;
+    }
+    /** 未完成任务角标：0=隐藏，>0 右上角剪贴板+数字 */
+    void SetTaskBadge(int count);
+
+   private:
+    void SetFishState(FishIconState st);
+    void SetHeartState(HeartIconState st);
+    void UpdateHungerShake(int satiety);
+
+    /* 底部一排：小鱼干(饱食) / 爱心(心情) / 电池(精力) / 金币数字 */
+    lv_obj_t* stat_fish_grp_ = nullptr;   /* 小鱼干宿主（抖动动画作用对象） */
+    lv_obj_t* fish_[3] = {nullptr, nullptr, nullptr};
+    lv_obj_t* stat_heart_grp_ = nullptr;  /* 爱心宿主 */
+    lv_obj_t* heart_[3] = {nullptr, nullptr, nullptr};
     lv_obj_t* stat_batt_ = nullptr;       /* 精力：电池填充 */
     lv_obj_t* stat_coins_lbl_ = nullptr;  /* 金币：只显数字 */
     lv_obj_t* stat_tear_[4] = {nullptr, nullptr, nullptr, nullptr};
     lv_obj_t* stat_star_[4] = {nullptr, nullptr, nullptr, nullptr};
+    FishIconState fish_state_ = FishIconState::kWhole;
+    HeartIconState heart_state_ = HeartIconState::kSolid;
+    int fish_base_x_ = 10;                /* 小鱼干锚点 x（抖动回中用） */
+    bool fish_shaking_ = false;
+
+    /* 未完成任务角标（屏幕顶部） */
+    lv_obj_t* task_badge_ = nullptr;
+    lv_obj_t* task_badge_lbl_ = nullptr;
 
     lv_timer_t* timer_ = nullptr;
 

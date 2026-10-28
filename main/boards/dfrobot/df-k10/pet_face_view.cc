@@ -262,13 +262,53 @@ void PetFaceView::Build(lv_obj_t* parent) {
         const lv_color_t kGreen = lv_color_hex(0x81C784);
         const lv_color_t kGold = lv_color_hex(0xFFD54F);
         const lv_color_t kTear = lv_color_hex(0x378ADD);
+        const lv_color_t kDark = lv_color_hex(0x3A2010);   /* 鱼眼 */
+        const lv_color_t kBarBg = lv_color_hex(0x2A1E18);  /* 咬痕/心口镂空用底色 */
+        const lv_color_t kCrack = lv_color_hex(0x8B3A4A);  /* 裂心纹 */
+        const lv_color_t kCoral = lv_color_hex(0xE85B4B);  /* 角标气泡 */
 
-        /* 格 1 饱食饭碗：碗沿 + 碗身 + 米饭（高度随饱食） */
-        mk(bar, 11, 23, 36, 5, kOrangeL, 3);
-        mk(bar, 14, 27, 30, 9, kOrange, 5);
-        stat_rice_ = mk(bar, 18, 14, 22, 12, kCream, 4);
+        /* 格 1 小鱼干（饱食三态状态机）：完整 / 被咬一口 / 鱼骨头
+         * satiety 0-100 → FishIconStateFromSatiety 切换显隐 */
+        stat_fish_grp_ = lv_obj_create(bar);
+        lv_obj_remove_style_all(stat_fish_grp_);
+        lv_obj_set_size(stat_fish_grp_, 42, 28);
+        lv_obj_set_pos(stat_fish_grp_, fish_base_x_, 6);
+        lv_obj_set_style_bg_opa(stat_fish_grp_, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(stat_fish_grp_, static_cast<lv_obj_flag_t>(
+                                              LV_OBJ_FLAG_SCROLLABLE |
+                                              LV_OBJ_FLAG_CLICKABLE));
+        for (int i = 0; i < 3; i++) {
+            fish_[i] = lv_obj_create(stat_fish_grp_);
+            lv_obj_remove_style_all(fish_[i]);
+            lv_obj_set_size(fish_[i], 42, 28);
+            lv_obj_set_pos(fish_[i], 0, 0);
+            lv_obj_set_style_bg_opa(fish_[i], LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(fish_[i], static_cast<lv_obj_flag_t>(
+                                            LV_OBJ_FLAG_SCROLLABLE |
+                                            LV_OBJ_FLAG_CLICKABLE));
+            lv_obj_add_flag(fish_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        /* 完整小鱼干：鱼身 + 尾巴 + 背鳍 + 眼睛 */
+        mk(fish_[0], 6, 8, 22, 12, kOrange, 6);
+        mk(fish_[0], 27, 10, 9, 8, kOrangeL, 3);
+        mk(fish_[0], 12, 4, 8, 5, kOrangeL, 2);
+        mk(fish_[0], 10, 12, 3, 3, kDark, 2);
+        /* 被咬一口：同上 + 左端咬痕（底色圆挖掉一口） */
+        mk(fish_[1], 6, 8, 22, 12, kOrange, 6);
+        mk(fish_[1], 27, 10, 9, 8, kOrangeL, 3);
+        mk(fish_[1], 12, 4, 8, 5, kOrangeL, 2);
+        mk(fish_[1], 10, 12, 3, 3, kDark, 2);
+        mk(fish_[1], 2, 6, 11, 11, kBarBg, 6);   /* 咬痕 */
+        /* 鱼骨头：头 + 脊骨 + 四根刺 + 尾 */
+        mk(fish_[2], 6, 8, 9, 11, kCream, 4);
+        mk(fish_[2], 14, 12, 20, 3, kCream, 1);
+        for (int r = 0; r < 4; r++) {
+            mk(fish_[2], 17 + r * 4, 7, 2, 11, kCream, 1);
+        }
+        mk(fish_[2], 33, 10, 7, 8, kCream, 2);
+        mk(fish_[2], 8, 11, 2, 2, kDark, 1);
 
-        /* 格 2 心情爱心：双圆叶 + 圆角底，整组透明度随心情 */
+        /* 格 2 爱心（心情三态状态机）：实心 / 空心 / 裂开 */
         stat_heart_grp_ = lv_obj_create(bar);
         lv_obj_remove_style_all(stat_heart_grp_);
         lv_obj_set_size(stat_heart_grp_, 30, 24);
@@ -277,9 +317,35 @@ void PetFaceView::Build(lv_obj_t* parent) {
         lv_obj_clear_flag(stat_heart_grp_, static_cast<lv_obj_flag_t>(
                                                LV_OBJ_FLAG_SCROLLABLE |
                                                LV_OBJ_FLAG_CLICKABLE));
-        mk(stat_heart_grp_, 0, 2, 12, 12, kPink, 6);
-        mk(stat_heart_grp_, 11, 2, 12, 12, kPink, 6);
-        mk(stat_heart_grp_, 0, 8, 23, 11, kPink, 5);
+        for (int i = 0; i < 3; i++) {
+            heart_[i] = lv_obj_create(stat_heart_grp_);
+            lv_obj_remove_style_all(heart_[i]);
+            lv_obj_set_size(heart_[i], 30, 24);
+            lv_obj_set_pos(heart_[i], 0, 0);
+            lv_obj_set_style_bg_opa(heart_[i], LV_OPA_TRANSP, 0);
+            lv_obj_clear_flag(heart_[i], static_cast<lv_obj_flag_t>(
+                                             LV_OBJ_FLAG_SCROLLABLE |
+                                             LV_OBJ_FLAG_CLICKABLE));
+            lv_obj_add_flag(heart_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        /* 实心：两叶 + 底 */
+        mk(heart_[0], 0, 2, 12, 12, kPink, 6);
+        mk(heart_[0], 11, 2, 12, 12, kPink, 6);
+        mk(heart_[0], 0, 8, 23, 11, kPink, 5);
+        /* 空心：外轮廓 + 内底色挖空 */
+        mk(heart_[1], 0, 2, 12, 12, kPink, 6);
+        mk(heart_[1], 11, 2, 12, 12, kPink, 6);
+        mk(heart_[1], 0, 8, 23, 11, kPink, 5);
+        mk(heart_[1], 3, 5, 7, 7, kBarBg, 4);
+        mk(heart_[1], 12, 5, 7, 7, kBarBg, 4);
+        mk(heart_[1], 4, 11, 14, 5, kBarBg, 3);
+        /* 裂开：实心 + 三道锯齿裂纹 */
+        mk(heart_[2], 0, 2, 12, 12, kPink, 6);
+        mk(heart_[2], 11, 2, 12, 12, kPink, 6);
+        mk(heart_[2], 0, 8, 23, 11, kPink, 5);
+        mk(heart_[2], 13, 3, 2, 7, kCrack, 0);
+        mk(heart_[2], 10, 9, 2, 6, kCrack, 0);
+        mk(heart_[2], 13, 14, 2, 6, kCrack, 0);
 
         /* 格 3 精力电池：壳 + 小帽 + 电量填充 */
         lv_obj_t* shell = mk(bar, 122, 13, 30, 15, kGreen, 4);
@@ -304,6 +370,48 @@ void PetFaceView::Build(lv_obj_t* parent) {
             stat_star_[i] = mk(bar, cx + 14, 2, 5, 5, kGold, 2);
             lv_obj_add_flag(stat_star_[i], LV_OBJ_FLAG_HIDDEN);
         }
+    }
+
+    /* ---- 未完成任务角标：顶部中上方「剪贴板 + 红色数字」 ----
+     * 有未完成任务（pending/submitted）时显示，数量即角标数字；没有就整个隐藏。
+     * 放在中上方避开左右猫耳，且不遮眼睛嘴巴。 */
+    {
+        auto mk2 = [&](lv_obj_t* parent, int x, int y, int w, int h,
+                       lv_color_t c, int r) {
+            lv_obj_t* o = lv_obj_create(parent);
+            lv_obj_remove_style_all(o);
+            lv_obj_set_size(o, w, h);
+            lv_obj_set_pos(o, x, y);
+            lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(o, c, 0);
+            lv_obj_set_style_radius(o, r, 0);
+            lv_obj_clear_flag(o, static_cast<lv_obj_flag_t>(
+                                     LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+            return o;
+        };
+        const lv_color_t kCream2 = lv_color_hex(0xFFF6E8);
+        const lv_color_t kOrange2 = lv_color_hex(0xE89B4B);
+        const lv_color_t kCoral2 = lv_color_hex(0xE85B4B);
+
+        task_badge_ = lv_obj_create(root_);
+        lv_obj_remove_style_all(task_badge_);
+        lv_obj_set_size(task_badge_, 40, 28);
+        lv_obj_set_pos(task_badge_, 100, 2);
+        lv_obj_set_style_bg_opa(task_badge_, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(task_badge_, static_cast<lv_obj_flag_t>(
+                                           LV_OBJ_FLAG_SCROLLABLE |
+                                           LV_OBJ_FLAG_CLICKABLE));
+        /* 剪贴板纸张 + 顶夹 */
+        mk2(task_badge_, 4, 5, 20, 20, kCream2, 3);
+        mk2(task_badge_, 10, 2, 8, 5, kOrange2, 2);
+        /* 红色数字气泡 */
+        mk2(task_badge_, 24, 0, 16, 16, kCoral2, 8);
+        task_badge_lbl_ = lv_label_create(task_badge_);
+        lv_label_set_text(task_badge_lbl_, "0");
+        lv_obj_set_style_text_color(task_badge_lbl_, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(task_badge_lbl_, &lv_font_montserrat_14, 0);
+        lv_obj_align(task_badge_lbl_, LV_ALIGN_TOP_RIGHT, -3, 0);
+        lv_obj_add_flag(task_badge_, LV_OBJ_FLAG_HIDDEN);
     }
 
     Apply();
@@ -736,7 +844,7 @@ void PetFaceView::SpawnFx(PetFxKind kind, int x, int y) {
 }
 
 void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
-    if (stat_rice_ == nullptr) {
+    if (stat_fish_grp_ == nullptr) {
         return;
     }
     if (hunger < 0) hunger = 0;
@@ -747,15 +855,12 @@ void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
     if (mood > 100) mood = 100;
     if (energy > 100) energy = 100;
 
-    /* 饱食：米饭堆高 3~15px（越高越饱） */
-    const int rh = 3 + (12 * hunger) / 100;
-    lv_obj_set_size(stat_rice_, 22, rh);
-    lv_obj_set_pos(stat_rice_, 18, 27 - rh);
+    /* 饱食(satiety 0-100) → 小鱼干三态 + 饥饿抖动 */
+    SetFishState(FishStateFromSatiety(hunger));
+    UpdateHungerShake(hunger);
 
-    /* 心情：爱心亮度（满=亮 / 半=半亮 / 低=暗） */
-    const lv_opa_t hopa = (mood >= 70) ? LV_OPA_COVER
-                                       : (mood >= 30 ? LV_OPA_70 : LV_OPA_50);
-    lv_obj_set_style_opa(stat_heart_grp_, hopa, 0);
+    /* 心情 → 爱心三态（实心/空心/裂开） */
+    SetHeartState(HeartStateFromMood(mood));
 
     /* 精力：电池电量 2~24px */
     lv_obj_set_width(stat_batt_, 2 + (22 * energy) / 100);
@@ -785,6 +890,78 @@ void PetFaceView::SetStats(int hunger, int mood, int energy, int coins) {
             }
         }
     }
+}
+
+/* ── 图标状态机实现 ───────────────────────────────────────────── */
+
+void PetFaceView::SetFishState(FishIconState st) {
+    fish_state_ = st;
+    for (int i = 0; i < 3; i++) {
+        if (fish_[i] == nullptr) continue;
+        if (i == static_cast<int>(st)) {
+            lv_obj_remove_flag(fish_[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(fish_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void PetFaceView::SetHeartState(HeartIconState st) {
+    heart_state_ = st;
+    for (int i = 0; i < 3; i++) {
+        if (heart_[i] == nullptr) continue;
+        if (i == static_cast<int>(st)) {
+            lv_obj_remove_flag(heart_[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(heart_[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+/* 抖动动画的 exec 回调（签名同 pet_fx 的 AnimX/AnimY） */
+static void FishShakeX(void* var, int32_t v) {
+    lv_obj_set_x(static_cast<lv_obj_t*>(var), v);
+}
+
+void PetFaceView::UpdateHungerShake(int satiety) {
+    if (stat_fish_grp_ == nullptr) {
+        return;
+    }
+    const bool hungry = satiety < 30;
+    if (hungry && !fish_shaking_) {
+        fish_shaking_ = true;
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, stat_fish_grp_);
+        lv_anim_set_exec_cb(&a, FishShakeX);
+        /* 幅度 ±2px，一来一回 220ms，抖一下歇 2.5s —— 微小但看得见的“饿得发慌” */
+        lv_anim_set_values(&a, fish_base_x_ - 2, fish_base_x_ + 2);
+        lv_anim_set_time(&a, 110);
+        lv_anim_set_playback_time(&a, 110);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_repeat_delay(&a, 2500);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
+    } else if (!hungry && fish_shaking_) {
+        fish_shaking_ = false;
+        lv_anim_delete(stat_fish_grp_, FishShakeX);
+        lv_obj_set_x(stat_fish_grp_, fish_base_x_);
+    }
+}
+
+void PetFaceView::SetTaskBadge(int count) {
+    if (task_badge_ == nullptr) {
+        return;
+    }
+    if (count <= 0) {
+        lv_obj_add_flag(task_badge_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char buf[8];
+    if (count > 99) count = 99;
+    snprintf(buf, sizeof(buf), "%d", count);
+    lv_label_set_text(task_badge_lbl_, buf);
+    lv_obj_remove_flag(task_badge_, LV_OBJ_FLAG_HIDDEN);
 }
 
 void PetFaceView::SetEyeOpenRatio(float ratio) {

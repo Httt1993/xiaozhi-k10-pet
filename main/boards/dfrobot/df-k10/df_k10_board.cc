@@ -289,6 +289,8 @@ private:
                  * 否则能量条一直停在初始「--」状态看不出来。 */
                 PetStatus st = self->pet_tools_->cloud().GetStatus();
                 self->display_->SetPetStats(st.hunger, st.mood, st.energy, st.coins);
+                /* 未完成任务角标：同步随状态刷新（2s 节拍），与看板状态一致 */
+                self->display_->SetTaskBadge(self->pet_tools_->cloud().CountOpenTasks());
                 /* 光感看护（A-15）：手电/遮挡触发表情反馈，顺同一节拍轮询 */
                 self->pet_tools_->WatchLightTick();
                 /* A-08/B-01 修复：WiFi 连上后把看板地址弹一次到屏幕上，

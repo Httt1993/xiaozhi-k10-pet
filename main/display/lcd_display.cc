@@ -1201,6 +1201,13 @@ void LcdDisplay::SetPetStats(int hunger, int mood, int energy, int coins) {
 #endif
 }
 
+void LcdDisplay::SetTaskBadge(int count) {
+    if (pet_face_view_ == nullptr) {
+        return;
+    }
+    pet_face_view_->SetTaskBadge(count);
+}
+
 void LcdDisplay::SetEmotion(const char* emotion) {
     if (!setup_ui_called_) {
         ESP_LOGW(TAG, "SetEmotion('%s') called before SetupUI() - emotion will not be displayed!",

@@ -108,6 +108,7 @@ bool IsAllowedAction(const char* action) {
         "sync", "feed", "play", "heal", "medicine", "sleep",
         "story", "song", "teach", "pet", "chat",
         "task_list", "task_publish", "task_approve", "task_reject",
+        "task_delete",
     };
     for (const char* a : kAllowed) {
         if (strcmp(action, a) == 0) return true;
@@ -155,6 +156,9 @@ padding:8px 0;border-bottom:1px solid #f0e8e0;font-size:14px}
 .badge{font-size:11px;padding:2px 8px;border-radius:8px;color:#fff}
 .badge.pending{background:#e8b04b}.badge.submitted{background:#6bb5e8}
 .badge.done{background:#5cb87a}
+.task-del{border:none;background:#f0dcc8;color:#b07050;width:26px;height:26px;
+border-radius:8px;font-size:13px;margin-left:8px;cursor:pointer;flex:none}
+.task-del:hover{background:#e8c4a8}.task-del:active{background:#d8b090}
 #pin-overlay{position:fixed;inset:0;background:rgba(245,240,235,.97);
 display:flex;align-items:center;justify-content:center;z-index:10}
 #pin-box{text-align:center}
@@ -255,11 +259,21 @@ renderTasks(d.tasks||[]);
 /* 连续失败才提示，成功一次就恢复 —— 修「一直显示连接失败重试中」（A-08） */
 if(failCount>=2)$('status-bar').textContent='⚠️ 连接失败，重试中…（'+failCount+' 次）'}
 finally{pollBusy=false}}
-function renderTasks(tasks){const el=$('task-list');
+let lastTasks=[];
+function renderTasks(tasks){const el=$('task-list');lastTasks=tasks;
 if(!tasks.length){el.innerHTML='<div style="color:#b09070;text-align:center;padding:12px">暂无任务</div>';return}
-el.innerHTML=tasks.map(t=>`<div class="task-item"><span>${t.title}</span>
+el.innerHTML=tasks.map((t,i)=>`<div class="task-item"><span>${t.title}</span>
 <div><span class="badge ${t.status}">${t.status==='pending'?'待完成':t.status==='submitted'?'等确认':'已完成'}</span>
-<span style="margin-left:6px;color:#e89b4b;font-weight:700">${t.reward}币</span></div></div>`).join('')}
+<span style="margin-left:6px;color:#e89b4b;font-weight:700">${t.reward}币</span>
+<button class="task-del" data-i="${i}" title="删除任务">✕</button></div></div>`).join('');
+el.querySelectorAll('.task-del').forEach(b=>{b.onclick=()=>{
+const t=lastTasks[+b.dataset.i];if(!t)return;
+if(!confirm('确定删除任务「'+t.title+'」吗？\n删除后不可恢复。'))return;
+cmd('task_delete',{task_id:t.id||'',title:t.title});};});}
+function deleteTask(i){/* 兜底入口，与按钮等价 */
+const t=lastTasks[i];if(!t)return;
+if(!confirm('确定删除任务「'+t.title+'」吗？\n删除后不可恢复。'))return;
+cmd('task_delete',{task_id:t.id||'',title:t.title})}
 async function cmd(action,args){try{
 const d=await api('/api/cmd',{method:'POST',
 headers:{'Content-Type':'application/json'},

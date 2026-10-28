@@ -61,8 +61,8 @@ Config GetConfig();
  *
  * @param state_json  设备带来的完整状态 JSON；nullptr 或空 = 首次，自动初始化。
  * @param action      sync / feed / medicine / play / heal / sleep / story / song /
- *                    teach / pet / chat / task_list / task_submit / task_publish /
- *                    task_approve / task_reject / coins / reset / ping
+ *                    teach / pet / chat / task_list / task_submit / task_publish / task_delete /
+ *                    task_approve / task_reject / task_delete / coins / reset / ping
  * @param args_json   动作参数，如 {"food":"苹果"}；可为 nullptr。
  * @param client_ts   设备时间（秒）；<=0 则用本地时间。偏差>5 分钟以本地时间为准。
  * @param out_response_json  输出：SCF 风格完整响应（含 status/state/events/say/...）。
