@@ -40,6 +40,7 @@ set(SOURCES "audio/audio_codec.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
+            "boot_diag.cc"
             "main.cc"
             )
 

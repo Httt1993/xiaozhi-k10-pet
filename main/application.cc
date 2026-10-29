@@ -3,6 +3,7 @@
 #include "assets/lang_config.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "boot_diag.h"
 #include "cjson_utils.h"
 #include "display.h"
 #include "mcp_server.h"
@@ -56,7 +57,34 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-bool Application::SetDeviceState(DeviceState state) { return state_machine_.TransitionTo(state); }
+bool Application::SetDeviceState(DeviceState state) {
+    bool ok = state_machine_.TransitionTo(state);
+    if (ok) {
+        // 诊断打点：把关键状态固化进 RTC（复位不丢），重启后就知道"死在哪个阶段"。
+        // 只映射里程碑状态，其它状态（Listening/Notifying...）不覆盖，避免刷掉现场。
+        switch (state) {
+            case kDeviceStateStarting:
+                BootDiag_SetStage(BOOT_STAGE_APP_INIT);
+                break;
+            case kDeviceStateWifiConfiguring:
+                BootDiag_SetStage(BOOT_STAGE_WIFI_CONNECT);
+                break;
+            case kDeviceStateConnecting:
+            case kDeviceStateActivating:
+                BootDiag_SetStage(BOOT_STAGE_NET_READY);
+                break;
+            case kDeviceStateSpeaking:
+                BootDiag_SetStage(BOOT_STAGE_SPEAKING);
+                break;
+            case kDeviceStateIdle:
+                BootDiag_SetStage(BOOT_STAGE_RUNNING);
+                break;
+            default:
+                break;
+        }
+    }
+    return ok;
+}
 
 void Application::Initialize() {
     auto& board = Board::GetInstance();

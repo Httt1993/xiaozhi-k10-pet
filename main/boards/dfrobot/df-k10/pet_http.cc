@@ -1,5 +1,6 @@
 #include "pet_http.h"
 #include "pet_engine.h"
+#include "boot_diag.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -615,6 +616,7 @@ static void PetHttpTask(void* arg) {
     g_listen_fd = listen_fd;
     g_running = true;
     ESP_LOGI(TAG, "HTTP dashboard ready: http://k10-pet.local:%d", kPort);
+    BootDiag_SetStage(BOOT_STAGE_HTTP_READY);   /* 诊断打点：本地看板已就绪 */
 
     /* 接受循环：每连接派发独立任务 */
     while (g_running) {

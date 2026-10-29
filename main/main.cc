@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "boot_diag.h"
 
 #define TAG "main"
 
@@ -22,8 +23,16 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    // ---- 诊断记账：让设备自己记录"上一次怎么复位的 / 死在哪一步" ----
+    BootDiag_RegisterShutdownHandler();   // 崩溃/重启前固化死前状态到 RTC
+    BootDiag_LogResetReason();            // 复位原因累计进 NVS + 打印分布
+    BootDiag_LogLastStage();              // 看看上一次死在哪个阶段
+    BootDiag_SetStage(BOOT_STAGE_NVS_READY);
+
     // Initialize and run the application
     auto& app = Application::GetInstance();
+    BootDiag_SetStage(BOOT_STAGE_APP_INIT);
     app.Initialize();
+    BootDiag_SetStage(BOOT_STAGE_RUNNING);
     app.Run();  // This function runs the main event loop and never returns
 }
