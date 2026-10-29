@@ -53,6 +53,21 @@ int64_t NowSec() {
     return (t > 1600000000) ? static_cast<int64_t>(t) : 0;
 }
 
+/* 循环发送直到全部字节发出（send() 不保证一次发完大 body） */
+static bool SendAll(int fd, const char* data, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        int n = send(fd, data + sent, len - sent, 0);
+        if (n <= 0) {
+            ESP_LOGW(TAG, "SendAll: send() returned %d at %u/%u", n,
+                     (unsigned)sent, (unsigned)len);
+            return false;
+        }
+        sent += (size_t)n;
+    }
+    return true;
+}
+
 /* 简易 HTTP 响应发送 */
 void SendHttpResponse(int fd, int status, const char* content_type,
                       const std::string& body) {
@@ -70,8 +85,8 @@ void SendHttpResponse(int fd, int status, const char* content_type,
         "Access-Control-Allow-Origin: *\r\n"
         "Connection: close\r\n\r\n",
         status, status_text, content_type, (int)body.size());
-    send(fd, header, hlen, 0);
-    send(fd, body.c_str(), body.size(), 0);
+    SendAll(fd, header, (size_t)hlen);
+    SendAll(fd, body.c_str(), body.size());
 }
 
 void SendJson(int fd, int status, const std::string& body) {

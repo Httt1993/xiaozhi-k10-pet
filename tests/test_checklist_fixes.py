@@ -333,6 +333,24 @@ ok("DismissAlert" in app, "连接成功会清掉错误提示")
 ok(transition_ok("kDeviceStateConnecting", "kDeviceStateIdle"),
    "连接失败回 idle，不永久卡「登录服务器」")
 
+# ================================================================ SendAll 循环发送
+section("SendAll 循环发送（2026-10-29 修复：body 11KB 超时）")
+
+http = read(os.path.join(K10, "pet_http.cc"))
+ok("SendAll" in http, "pet_http.cc 定义了 SendAll 循环发送函数")
+ok("static bool SendAll" in http, "SendAll 返回 bool 表示发送结果")
+ok("while (sent < len)" in http, "SendAll 用 while 循环确保全部字节发出")
+ok("send(fd, data + sent, len - sent, 0)" in http,
+   "SendAll 内 send() 用偏移+剩余长度增量发送")
+
+# SendHttpResponse 必须走 SendAll，不能裸 send() 一把梭
+sir_start = http.find("void SendHttpResponse")
+sir_end = http.find("\n}", sir_start)
+sir_block = http[sir_start:sir_end] if sir_start != -1 and sir_end != -1 else ""
+ok("SendAll(fd, header" in sir_block, "响应头走 SendAll")
+ok("SendAll(fd, body.c_str()" in sir_block, "响应 body 走 SendAll（原 bug：单次 send 丢数据）")
+ok("send(fd, body" not in sir_block, "SendHttpResponse 内不再裸 send() body")
+
 # ================================================================ 结果
 print("\n" + "=" * 50)
 print(f"总计 {PASS + FAIL} 项  ·  通过 {PASS}  ·  失败 {FAIL}")
