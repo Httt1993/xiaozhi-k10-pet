@@ -25,6 +25,9 @@
 #include <esp_netif.h>       /* A-08/B-01: 屏幕弹 IP 用 */
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
+#include <nvs.h>            /* PET_PATCH: 双击开关机的关机标记 */
+#include <esp_system.h>     /* PET_PATCH: esp_restart */
+#include <esp_sleep.h>      /* PET_PATCH: 关机模式 light sleep 轮询按键 */
 
 #include "esp_io_expander_tca95xx_16bit.h"
 
@@ -117,6 +120,86 @@ private:
         }
     }
 
+    /* ========== PET_PATCH: 双击A=开机 / 双击B=关机 ==========
+     * 硬件约束：A/B 键挂在 TCA9555（I2C 扩展器）上，深度睡眠叫不醒（无唤醒线）。
+     * 设计：关机 = 落 NVS 标记 + esp_restart() 重启进「关机模式」——
+     *      背光灭(TCA9555 P0.0)、相机保持复位(P0.1)、WiFi/音频/宠物全部不启动，
+     *      light sleep 每 80ms 轮询 A 键；双击A = 清标记 + esp_restart() = 开机。
+     * 真断电（长期不用）仍走电池上的物理开关线，见《零焊接装配接线表.txt》。 */
+    bool PowerOffFlagGet() {
+        nvs_handle_t h = 0;
+        if (nvs_open("petpwr", NVS_READONLY, &h) != ESP_OK) {
+            return false;
+        }
+        uint8_t v = 0;
+        nvs_get_u8(h, "off", &v);
+        nvs_close(h);
+        return v == 1;
+    }
+
+    void PowerOffFlagSet(bool on) {
+        nvs_handle_t h = 0;
+        if (nvs_open("petpwr", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u8(h, "off", on ? 1 : 0);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+
+    /* 双击B（开机状态）：提示 → 打标记 → 重启进关机模式 */
+    void EnterPowerOff() {
+        ESP_LOGI(TAG, "Power off requested (double-click B)");
+        if (display_ != nullptr) {
+            display_->ShowNotification("关机中…（双击A键开机）", 1200);
+        }
+        vTaskDelay(1300 / portTICK_PERIOD_MS);
+        PowerOffFlagSet(true);
+        esp_restart();
+    }
+
+    /* 关机模式主循环：light sleep 轮询 A 键，双击 = 开机。
+     * 不走 iot_button：它的 5ms 节拍定时器会把 light sleep 打成筛子。 */
+    void RunPowerOffLoop() {
+        ESP_LOGI(TAG, "Power-off mode entered. Double-click A to power on.");
+        /* 灭背光(P0.0) + 相机保持复位(P0.1)——关机模式省电核心
+         *（InitializeIoExpander 的上电脉冲刚把它们点亮/释放，这里收回来） */
+        IoExpanderSetLevel(IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1, 0);
+
+        const int64_t kPollUs = 80000;         // 80ms 轮询一次
+        const int64_t kDoubleClickUs = 500000; // 500ms 内两击 = 双击
+        const int64_t kDebounceUs = 100000;    // <100ms 的边沿当按键抖动
+        int64_t last_click_us = 0;
+        bool prev_pressed = false;
+        int idle_feed = 0;
+        while (true) {
+            esp_sleep_enable_timer_wakeup(kPollUs);
+            if (esp_light_sleep_start() != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(80)); // 兜底：light sleep 失败就普通延时
+            }
+            /* 关机模式不给 idle 任务跑量（光睡轮询），任务看门狗(TWDT 10s)会饿死误触发；
+             * 每 ~0.8s 让出一个 tick 让 idle 跑一下喂狗（实测功耗代价 <0.3mA） */
+            if (++idle_feed >= 10) {
+                idle_feed = 0;
+                vTaskDelay(1);
+            }
+            bool pressed = !IoExpanderGetLevel(IO_EXPANDER_PIN_NUM_2); // 与 btn_a 同脚，低有效
+            if (pressed && !prev_pressed) {
+                int64_t now = esp_timer_get_time();
+                int64_t dt = now - last_click_us;
+                if (last_click_us != 0 && dt < kDebounceUs) {
+                    /* 抖动边沿，忽略 */
+                } else if (last_click_us != 0 && dt < kDoubleClickUs) {
+                    ESP_LOGI(TAG, "Double-click A: power on");
+                    PowerOffFlagSet(false);
+                    esp_restart(); // 干净开机（全外设正常初始化）
+                } else {
+                    last_click_us = now; // 新一轮点击计时
+                }
+            }
+            prev_pressed = pressed;
+        }
+    }
+
     void InitializeButtons() {
         instance_ = this;
 
@@ -140,10 +223,27 @@ private:
             }
             app.ToggleChatState();
         }, this);
-        // PET_PATCH: A 双击 = 喂食（咀嚼 + 开心）
+        // PET_PATCH: A 双击 = 开机。
+        // 关机模式下由 RunPowerOffLoop 手动检测双击并重启开机；
+        // 这里处理「开机状态下又双击」→ 提示已开机。
+        // 原喂食手势挪到 A 三击（见下），喂食也可继续用语音「喂食」或家长看板按钮。
         iot_button_register_cb(btn_a, BUTTON_DOUBLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
-            PetMotionInject(PET_MOTION_FEED);
+            auto self = static_cast<Df_K10Board*>(usr_data);
+            if (self->display_ != nullptr) {
+                self->display_->ShowNotification("已开机～ 关机请双击B键", 1500);
+            }
         }, this);
+        // PET_PATCH: A 三击 = 喂食（咀嚼 + 开心）——从双击挪过来，双击让位给开机
+        {
+            button_event_args_t feed_args = {
+                .multiple_clicks = {
+                    .clicks = 3
+                }
+            };
+            iot_button_register_cb(btn_a, BUTTON_MULTIPLE_CLICK, &feed_args, [](void* button_handle, void* usr_data) {
+                PetMotionInject(PET_MOTION_FEED);
+            }, this);
+        }
         iot_button_register_cb(btn_a, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<Df_K10Board*>(usr_data);
             auto codec = self->GetAudioCodec();
@@ -170,6 +270,11 @@ private:
         // 要切对话仍可用 A 键。
         iot_button_register_cb(btn_b, BUTTON_SINGLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
             PetMotionInject(PET_MOTION_PET);
+        }, this);
+        // PET_PATCH: B 双击 = 关机（重启进关机模式：灭屏/断网/低功耗，双击A开机）
+        iot_button_register_cb(btn_b, BUTTON_DOUBLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
+            auto self = static_cast<Df_K10Board*>(usr_data);
+            self->EnterPowerOff();
         }, this);
         iot_button_register_cb(btn_b, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<Df_K10Board*>(usr_data);
@@ -327,6 +432,11 @@ public:
         PetSdCardProbe();   // PET_SD_PROBE=1 时遍历候选引脚找 TF 卡，必须在 SPI 屏幕之前
         InitializeI2c();
         InitializeIoExpander();
+        // PET_PATCH: 双击B关机后重启会进关机模式——不点屏/不联网/不启动宠物，
+        // 只留按键轮询（RunPowerOffLoop 永不返回：双击A → esp_restart 正常开机）
+        if (PowerOffFlagGet()) {
+            RunPowerOffLoop();
+        }
         InitializeSpi();
         InitializeIli9341Display();
         InitializeButtons();
