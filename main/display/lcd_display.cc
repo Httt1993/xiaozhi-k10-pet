@@ -1210,6 +1210,10 @@ void LcdDisplay::SetTaskBadge(int count) {
     if (pet_face_view_ == nullptr) {
         return;
     }
+    // 必须上锁：调用者是 esp_timer 2s 定时器 / pet_cloud ActionHook（HTTP 任务），
+    // 都不是 LVGL 线程。裸调 lv_label_set_text 会和 lvgl_port_task 竞态，
+    // 实测把 tlsf 堆写坏（lv_tlsf_free 死循环 → 看门狗每 10s 咬一次，屏幕卡死）。
+    DisplayLockGuard lock(this);
     pet_face_view_->SetTaskBadge(count);
 }
 

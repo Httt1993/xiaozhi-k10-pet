@@ -123,7 +123,13 @@ void PetFxLayer::AnimReady(lv_anim_t* a) {
     /* 动画结束 → 找到所属 layer 的槽位释放。用 user_data 指回槽位。 */
     auto* slot = static_cast<Slot*>(a->user_data);
     if (slot != nullptr && slot->root == o) {
-        lv_obj_delete(slot->root);
+        /* 不能在这里同步 lv_obj_delete：
+         * 1) 这里在 anim_timer 的动画链表迭代中，删对象会摘掉同一对象上的
+         *    另一条 X 动画（AnimX 与 AnimY 同时跑），下一轮迭代即 use-after-free；
+         * 2) 实测崩溃链：AnimReady → lv_obj_delete → lv_event_mark_deleted
+         *    解引用 NULL+0xF4（Guru LoadProhibited）。
+         * 改用 lv_obj_delete_async 推迟到本轮 timer 处理完再删。 */
+        lv_obj_delete_async(o);
         slot->root = nullptr;
         slot->busy = false;
     }
