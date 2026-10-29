@@ -4,6 +4,7 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#include <ctime>
 
 #define TAG "PetStrip"
 
@@ -27,6 +28,29 @@ constexpr const char* kKeyG = "g";
 constexpr const char* kKeyB = "b";
 constexpr const char* kKeyLevel = "level";
 constexpr const char* kKeyBreathe = "breathe";
+constexpr const char* kKeyFx = "fx";
+
+/* 明灭（方波）：亮 8 步 / 灭 7 步 × 40ms ≈ 1.2s 一周期 */
+constexpr int kBlinkPeriod = 15;
+constexpr int kBlinkOnSteps = 8;
+/* 慢渐变 FADE：单程 60 步 × 40ms = 2.4s，往返 4.8s，可以到 0% */
+constexpr int kFadePhaseMax = 60;
+/* 跑马 RUN：绕 3 颗灯转一圈 12 步 × 40ms ≈ 0.5s 一圈 */
+constexpr int kRunPhaseMax = 12;
+
+/*
+ * 夜间（21:30–07:00）灯效整体压到 40%，提醒不炸眼。
+ * 时钟没同步（年份 < 2020）时不做夜间判定，按白天算。
+ */
+bool NightDimNow() {
+    time_t now = time(nullptr);
+    struct tm lt;
+    if (now < 1577836800 /* 2020-01-01 */ || localtime_r(&now, &lt) == nullptr) {
+        return false;
+    }
+    int minutes = lt.tm_hour * 60 + lt.tm_min;
+    return minutes >= 21 * 60 + 30 || minutes < 7 * 60;
+}
 
 inline bool SameColor(const StripColor& a, const StripColor& b) {
     return a.red == b.red && a.green == b.green && a.blue == b.blue;
@@ -89,6 +113,12 @@ PetStrip::~PetStrip() {
 
 void PetStrip::SetMood(uint8_t red, uint8_t green, uint8_t blue, int level, bool breathe,
                        bool persist) {
+    SetMoodFx(red, green, blue, level,
+              breathe ? PET_MOOD_FX_BREATHE : PET_MOOD_FX_SOLID, persist);
+}
+
+void PetStrip::SetMoodFx(uint8_t red, uint8_t green, uint8_t blue, int level, PetMoodFx fx,
+                         bool persist) {
     if (level < 1) {
         level = 1;
     }
@@ -103,19 +133,24 @@ void PetStrip::SetMood(uint8_t red, uint8_t green, uint8_t blue, int level, bool
         mood_raw_.green = green;
         mood_raw_.blue = blue;
         mood_level_ = level;
-        mood_breathe_ = breathe;
+        mood_fx_ = fx;
+        mood_breathe_ = (fx == PET_MOOD_FX_BREATHE);
         mood_suppressed_ = false; /* 重新点亮，解除「明确关灯」 */
 
         /* level 1-10 → 10%..100% */
         mood_color_ = ScalePct(mood_raw_, level * 10);
+        if (fx == PET_MOOD_FX_OFF) {
+            mood_color_ = {0, 0, 0};
+        }
         mood_active_ =
             (mood_color_.red != 0 || mood_color_.green != 0 || mood_color_.blue != 0);
 
         mood_phase_ = 0;
         ApplyMoodLocked();
 
-        ESP_LOGI(TAG, "PET_PATCH: set_mood rgb(%u,%u,%u) level=%d breathe=%d -> on rgb(%u,%u,%u)",
-                 red, green, blue, level, breathe ? 1 : 0, mood_color_.red, mood_color_.green,
+        ESP_LOGI(TAG,
+                 "PET_PATCH: set_mood_fx rgb(%u,%u,%u) level=%d fx=%d -> on rgb(%u,%u,%u)", red,
+                 green, blue, level, static_cast<int>(fx), mood_color_.red, mood_color_.green,
                  mood_color_.blue);
     }
 
@@ -125,7 +160,8 @@ void PetStrip::SetMood(uint8_t red, uint8_t green, uint8_t blue, int level, bool
         settings.SetInt(kKeyG, green);
         settings.SetInt(kKeyB, blue);
         settings.SetInt(kKeyLevel, level);
-        settings.SetBool(kKeyBreathe, breathe);
+        settings.SetInt(kKeyFx, static_cast<int>(fx));
+        settings.SetBool(kKeyBreathe, fx == PET_MOOD_FX_BREATHE);
     }
 }
 
@@ -135,6 +171,7 @@ void PetStrip::ClearMood() {
         mood_active_ = false;
         mood_suppressed_ = true; /* 明确关灯：之后所有状态都保持黑 */
         mood_breathe_ = false;
+        mood_fx_ = PET_MOOD_FX_OFF;
         mood_raw_ = {0, 0, 0};
         mood_color_ = {0, 0, 0};
         mood_last_ = {0, 0, 0};
@@ -161,6 +198,7 @@ void PetStrip::LoadSavedMood() {
     uint8_t green = 0;
     uint8_t blue = 0;
     bool breathe = false;
+    int fx_raw = -1;
 
     {
         Settings settings(kNvsNamespace, true);
@@ -173,6 +211,7 @@ void PetStrip::LoadSavedMood() {
             green = static_cast<uint8_t>(settings.GetInt(kKeyG, 0));
             blue = static_cast<uint8_t>(settings.GetInt(kKeyB, 0));
             breathe = settings.GetBool(kKeyBreathe, false);
+            fx_raw = settings.GetInt(kKeyFx, -1);
         }
     }
 
@@ -191,12 +230,21 @@ void PetStrip::LoadSavedMood() {
         return;
     }
 
+    /* fx 键不存在时按老的 breathe 键折算（老 NVS 平滑迁移） */
+    PetMoodFx fx = PET_MOOD_FX_SOLID;
+    if (fx_raw >= 0 && fx_raw <= static_cast<int>(PET_MOOD_FX_FADE)) {
+        fx = static_cast<PetMoodFx>(fx_raw);
+    } else if (breathe) {
+        fx = PET_MOOD_FX_BREATHE;
+    }
+
     /* persist=false：刚从 NVS 读出来，不要再写一遍 */
-    SetMood(red, green, blue, level, breathe, false);
+    SetMoodFx(red, green, blue, level, fx, false);
 
     /* 定时器已由 ApplyMoodLocked 启动；真正接管要等第一次 OnStateChanged
      * （那时 app_ready_ 才为 true，才允许读 Application 的设备状态） */
-    ESP_LOGI(TAG, "PET_PATCH: restored mood rgb(%u,%u,%u) level=%d", red, green, blue, level);
+    ESP_LOGI(TAG, "PET_PATCH: restored mood rgb(%u,%u,%u) level=%d fx=%d", red, green, blue, level,
+             static_cast<int>(fx));
 }
 
 /*
@@ -262,6 +310,7 @@ void PetStrip::MoodTick(bool force) {
     }
 
     StripColor target;
+    bool run_mode = false; /* 跑马：逐颗写而不是整体写 */
 
     if (!mood_active_) {
         /* 明确关灯：所有状态都保持黑 */
@@ -273,6 +322,7 @@ void PetStrip::MoodTick(bool force) {
         switch (state) {
             case kDeviceStateListening:
             case kDeviceStateAudioTesting:
+                /* 设备状态节奏优先（在听=快速脉动），不抢心情灯效 */
                 period = kListenPhaseMax;
                 low_pct = kListenLowPct;
                 break;
@@ -281,14 +331,52 @@ void PetStrip::MoodTick(bool force) {
                 period = 0;
                 break;
             default:
-                if (mood_breathe_) {
-                    period = kMoodPhaseMax;
-                    low_pct = kMoodLowPct;
+                /* 待机：按设定的灯效出波形（映射设计 SECTION 06） */
+                switch (mood_fx_) {
+                    case PET_MOOD_FX_OFF:
+                        target = {0, 0, 0};
+                        period = -1; /* 特殊：直接用 target */
+                        break;
+                    case PET_MOOD_FX_SOLID:
+                        period = 0;
+                        break;
+                    case PET_MOOD_FX_BREATHE:
+                        period = kMoodPhaseMax;
+                        low_pct = kMoodLowPct;
+                        break;
+                    case PET_MOOD_FX_PULSE:
+                        period = kListenPhaseMax;
+                        low_pct = kListenLowPct;
+                        break;
+                    case PET_MOOD_FX_FADE:
+                        period = kFadePhaseMax;
+                        low_pct = 0;
+                        break;
+                    case PET_MOOD_FX_BLINK:
+                        period = -2; /* 方波，单独算 */
+                        break;
+                    case PET_MOOD_FX_RUN:
+                        period = -3; /* 跑马，逐颗写 */
+                        break;
                 }
                 break;
         }
 
-        if (period == 0) {
+        if (period == -1) {
+            /* FX_OFF：target 已置黑 */
+        } else if (period == -2) {
+            mood_phase_++;
+            if (mood_phase_ >= kBlinkPeriod) {
+                mood_phase_ = 0;
+            }
+            target = (mood_phase_ < kBlinkOnSteps) ? mood_color_ : StripColor{0, 0, 0};
+        } else if (period == -3) {
+            run_mode = true;
+            mood_phase_++;
+            if (mood_phase_ >= kRunPhaseMax) {
+                mood_phase_ = 0;
+            }
+        } else if (period == 0) {
             target = mood_color_;
         } else {
             mood_phase_++;
@@ -300,6 +388,32 @@ void PetStrip::MoodTick(bool force) {
             int pct = 100 - (100 - low_pct) * step / period;
             target = ScalePct(mood_color_, pct);
         }
+
+        /* 夜间 21:30–07:00 整体压到 40%（提醒不炸眼） */
+        if (NightDimNow()) {
+            if (run_mode) {
+                /* 跑马在写灯前压 */
+            } else {
+                target = ScalePct(target, 40);
+            }
+        }
+    }
+
+    if (run_mode) {
+        /* 3 颗灯轮流亮：相位 0..11，每颗占 4 步 */
+        int hot = (mood_phase_ / 4) % 3;
+        StripColor on = mood_color_;
+        StripColor off = ScalePct(mood_color_, 12);
+        if (NightDimNow()) {
+            on = ScalePct(on, 40);
+            off = ScalePct(off, 40);
+        }
+        for (int i = 0; i < 3; i++) {
+            SetSingleColor(i, i == hot ? on : off);
+        }
+        mood_last_ = on;
+        mood_written_ = true;
+        return;
     }
 
     if (!force && mood_written_ && SameColor(target, mood_last_)) {

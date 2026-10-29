@@ -27,6 +27,10 @@ enum PetFxKind {
     PET_FX_ANGER,
     PET_FX_QUESTION,
     PET_FX_TEAR,
+    /* 提醒生动化新增 3 种（《儿童状态提醒生动化设计》SECTION 02） */
+    PET_FX_SWEAT,    /* 汗滴：生病/紧张 */
+    PET_FX_NOTE,     /* 音符：声音提醒 */
+    PET_FX_EXCLAIM,  /* 感叹号：升级提醒 */
 };
 
 class PetFxLayer {

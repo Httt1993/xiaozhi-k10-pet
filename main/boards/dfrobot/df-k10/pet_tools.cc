@@ -2,8 +2,12 @@
 #include "pet_config.h"
 #include "pet_face_view.h"
 #include "pet_motion.h"
+#include "pet_remind.h"
 #include "mcp_server.h"
 #include "display/lvgl_display/lvgl_theme.h"
+
+#include "application.h"
+#include "assets/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -97,10 +101,62 @@ const char* LightLevelText(float lux) {
     return "很强";
 }
 
+/*
+ * 状态 → 脸 + 灯 + 灯效 + 字幕 映射总表
+ * （《AI-Buddy-状态表情LED联动映射设计》SECTION 03 的代码化；也是 /api/map 的数据源。
+ *   看板的脸小样/灯色圆点从这份表画，保证「看板说的 = 设备演的」）。
+ */
+struct StateMapEntry {
+    const char* state;   /* 状态名（= 事件名） */
+    const char* face;    /* 猫脸槽位 */
+    const char* color;   /* kPetColors 颜色名 */
+    int level;           /* 亮度 1-10 */
+    PetMoodFx fx;        /* 灯效 */
+    const char* caption; /* 字幕（免打扰时不上） */
+    bool worsening;      /* 恶化类：穿透手动灯保护期 */
+};
+const StateMapEntry kStateMap[] = {
+    {"sick",     "sick",    "red",         6, PET_MOOD_FX_BLINK,   "头昏昏的……需要治疗", true},
+    {"starving", "hungry",  "warm_orange", 8, PET_MOOD_FX_PULSE,   "饿得不行了！",       true},
+    {"hungry",   "hungry",  "warm_orange", 5, PET_MOOD_FX_BREATHE, "肚子饿了",           false},
+    {"tired",    "sad",     "blue",        4, PET_MOOD_FX_BREATHE, "累了想休息",         false},
+    {"sad",      "sad",     "blue",        4, PET_MOOD_FX_BREATHE, "心情不好……",         false},
+    {"bored",    "neutral", "sky_blue",    4, PET_MOOD_FX_SOLID,   "有点无聊",           false},
+    {"great",    "happy",   "green",       3, PET_MOOD_FX_BREATHE, "今天状态超好！",     false},
+    {"normal",   "neutral", "off",         1, PET_MOOD_FX_OFF,     "",                   false},
+};
+const int kStateMapCount = sizeof(kStateMap) / sizeof(kStateMap[0]);
+
+const StateMapEntry* FindStateMap(const char* state) {
+    for (int i = 0; i < kStateMapCount; i++) {
+        if (strcmp(state, kStateMap[i].state) == 0) {
+            return &kStateMap[i];
+        }
+    }
+    return nullptr;
+}
+
+/* events[0] → 状态名；空 = normal */
+const char* StateFromEvents(const std::vector<std::string>& events) {
+    if (events.empty()) {
+        return "normal";
+    }
+    const std::string& top = events.front();
+    if (top == "sick" || top == "starving" || top == "hungry" || top == "tired" ||
+        top == "sad" || top == "bored" || top == "great") {
+        return top.c_str();
+    }
+    return "normal";
+}
+
+/* Celebrate 的一次性恢复定时器要回调实例方法 */
+PetTools* s_instance_ = nullptr;
+
 }  // namespace
 
 PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2c_bus)
     : strip_(strip), display_(display), i2c_bus_(i2c_bus), sensors_(i2c_bus) {
+    s_instance_ = this;
     sensors_.Init();
     cloud_.Init();
 
@@ -108,6 +164,44 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
     RegisterFaceTools();
     RegisterSensorTools();
     RegisterCloudTools();
+
+    /* 提醒链钩子（pet_remind 回调这边的字幕/音效/脸灯/庆祝） */
+    {
+        pet_remind::Hooks hooks = {};
+        hooks.show_notice = [](const char* text, int ms) {
+            if (s_instance_ != nullptr && s_instance_->display_ != nullptr) {
+                s_instance_->display_->ShowNotification(text, ms);
+            }
+        };
+        hooks.play_sound = [](int idx) {
+            switch (idx) {
+                case 1: Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS); break;
+                case 2: Application::GetInstance().PlaySound(Lang::Sounds::OGG_EXCLAMATION); break;
+                case 3: Application::GetInstance().PlaySound(Lang::Sounds::OGG_VIBRATION); break;
+                default: Application::GetInstance().PlaySound(Lang::Sounds::OGG_POPUP); break;
+            }
+        };
+        hooks.apply_face_led = [](const char* state, int calm) {
+            if (s_instance_ != nullptr) {
+                s_instance_->ApplyStateL1(state, calm);
+            }
+        };
+        hooks.celebrate = [](int ms) {
+            if (s_instance_ != nullptr) {
+                s_instance_->Celebrate(ms);
+            }
+        };
+        pet_remind::SetHooks(hooks);
+        pet_remind::Init(esp_timer_get_time() / 1000);
+    }
+
+    /* 开机即对齐状态（映射设计 6 触发点之一）：NVS 里恢复的宠物状态直接演出来，
+     * 不用等第一次动作/说话。 */
+    {
+        PetActionResult boot;
+        boot.events = cloud_.GetStatus().events;
+        ReactToEvents(boot);
+    }
 
     /*
      * 家长看板 / HTTP / 心跳 这些非语音路径执行动作时，也要让设备「有反应」：
@@ -225,6 +319,8 @@ void PetTools::RegisterMoodTools() {
             if (strip_ != nullptr) {
                 strip_->SetMood(entry->red, entry->green, entry->blue, level, breathe);
             }
+            /* 手动灯保护 15 分钟：期间非恶化状态的自动联动不抢灯（映射设计） */
+            manual_mood_until_ms_ = esp_timer_get_time() / 1000 + 15 * 60 * 1000;
 
             char buf[96];
             snprintf(buf, sizeof(buf), "灯已设为 %s，亮度 %d%s", entry->name, level,
@@ -241,6 +337,7 @@ void PetTools::RegisterMoodTools() {
             if (strip_ != nullptr) {
                 strip_->ClearMood();
             }
+            manual_mood_until_ms_ = esp_timer_get_time() / 1000 + 15 * 60 * 1000;
             return std::string("灯已熄灭");
         });
 }
@@ -485,65 +582,198 @@ std::string PetTools::StatusJson(const PetStatus& st, const char* mode) {
 }
 
 /*
- * 状态 → 灯 + 脸 的自动联动。
+ * 状态 → 脸 + 灯 + 字幕 的自动联动（映射设计 SECTION 05 的实现）。
  *
- * 只在「最高优先级事件发生变化」时动手。原因：孩子可能刚说过「把灯设成紫色」，
- * 如果每轮动作都按状态覆盖一遍，用户的手动设置就永远留不住。
- * 事件变了才代表宠物真的换了状态（比如刚饿到不行、刚生病、刚治好），这时候变灯才合理。
+ * 三条铁律：
+ *   1. 联动原子性：脸 + 灯 + 灯效 + 字幕一次换齐（ApplyStateL1），绝不只换脸不换灯；
+ *   2. 手动灯保护 15 分钟：用户 set_mood 之后非恶化状态不抢灯；恶化类（病/饿极）穿透；
+ *   3. 恶化穿透事件锁：刚喂完就饿极？立刻换，不许挂着笑脸。
  */
 void PetTools::ReactToEvents(const PetActionResult& result) {
 #if PET_CLOUD_AUTO_REACT
-    struct Reaction {
-        const char* event;
-        const char* color;
-        int level;
-        const char* face;
-    };
-    /* 顺序无关紧要：events 已经是按严重程度排好序的，取第一个即可 */
-    static const Reaction kReactions[] = {
-        {"sick", "red", 6, "sick"},
-        {"starving", "warm_orange", 8, "hungry"},
-        {"hungry", "warm_orange", 5, "hungry"},
-        {"tired", "blue", 4, "sad"},
-        {"sad", "blue", 4, "sad"},
-        {"bored", "sky_blue", 4, "neutral"},
-        {"great", "green", 5, "happy"},
-    };
-
-    if (result.events.empty()) {
-        /* 恢复正常：清掉记录，下次再出状况还能触发 */
-        last_react_event_.clear();
+    const char* state = StateFromEvents(result.events);
+    const StateMapEntry* entry = FindStateMap(state);
+    if (entry == nullptr) {
         return;
     }
 
-    const std::string& top = result.events.front();
-    if (top == last_react_event_) {
+    bool changed = (state != current_state_);
+    if (!changed && !entry->worsening) {
         return; /* 状态没本质变化，不打扰用户手动设的灯 */
     }
-    last_react_event_ = top;
 
-    for (const auto& r : kReactions) {
-        if (top != r.event) {
-            continue;
-        }
-        const PetColorEntry* entry = FindColor(r.color);
-        if (entry != nullptr && strip_ != nullptr) {
-            level_ = r.level;
-            mood_name_ = entry->name;
-            strip_->SetMood(entry->red, entry->green, entry->blue, r.level, true);
-        }
-        if (display_ != nullptr && FaceExists(r.face)) {
-            if (display_->SetPetFace(r.face)) {
-                face_ = r.face;
-            }
-        }
-        ESP_LOGI(TAG, "PET_PATCH: auto react event=%s -> light=%s level=%d face=%s", r.event,
-                 r.color, r.level, r.face);
-        return;
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    bool protected_now = now_ms < manual_mood_until_ms_;
+    if (protected_now && !entry->worsening) {
+        /* 手动灯保护期内：只记状态，不抢灯不换脸（watchdog 到期再补） */
+        current_state_ = state;
+        state_rev_++;
+        ESP_LOGI(TAG, "PET_PATCH: manual-mood protected, state=%s deferred", state);
+    } else {
+        current_state_ = state;
+        state_rev_++;
+        ApplyStateL1(state, pet_remind::DndActive(now_ms) ? 1 : 0);
     }
+
+    if (changed) {
+        ESP_LOGI(TAG, "PET_PATCH: state %s -> %s (rev=%u)%s", last_react_event_.c_str(), state,
+                 state_rev_, entry->worsening ? " worsening" : "");
+    }
+    last_react_event_ = state;
+
+    /* 提醒升级链联动（免打扰约束在 pet_remind 内部） */
+    pet_remind::OnState(state, now_ms);
 #else
     (void)result;
 #endif
+}
+
+/*
+ * L1 应用：脸 + 灯 + 灯效 + 字幕 一次换齐（映射设计的「四件套原子切换」）。
+ * calm=1（免打扰）：灯效封顶慢呼吸、亮度封顶 4 级、不上字幕。
+ */
+void PetTools::ApplyStateL1(const char* state, int calm) {
+    const StateMapEntry* entry = FindStateMap(state);
+    if (entry == nullptr) {
+        return;
+    }
+
+    /* 脸 */
+    if (display_ != nullptr && FaceExists(entry->face)) {
+        if (display_->SetPetFace(entry->face)) {
+            face_ = entry->face;
+        }
+    }
+
+    /* 灯 + 灯效 */
+    const PetColorEntry* color = FindColor(entry->color);
+    if (color != nullptr && strip_ != nullptr) {
+        int level = entry->level;
+        PetMoodFx fx = entry->fx;
+        if (calm) {
+            if (level > 4) {
+                level = 4;
+            }
+            /* 免打扰：禁明灭/跑马，只留常亮/慢呼吸/熄灭 */
+            if (fx == PET_MOOD_FX_BLINK || fx == PET_MOOD_FX_PULSE || fx == PET_MOOD_FX_RUN) {
+                fx = PET_MOOD_FX_BREATHE;
+            }
+        }
+        level_ = level;
+        mood_name_ = entry->color;
+        strip_->SetMoodFx(color->red, color->green, color->blue, level, fx);
+    }
+
+    /* 字幕（免打扰不上；normal 的空字幕不弹） */
+    if (!calm && display_ != nullptr && entry->caption[0] != '\0') {
+        display_->ShowNotification(entry->caption, 2500);
+    }
+}
+
+/* 庆祝演出：孩子响应 / 状态好转（病愈、吃饱）——因果反馈链的「果」 */
+void PetTools::Celebrate(int ms) {
+    (void)ms;
+    if (display_ != nullptr) {
+        display_->SetPetFace("happy");
+        face_ = "happy";
+        display_->ShowNotification("嘿嘿，谢谢照顾！", 2500);
+    }
+    if (strip_ != nullptr) {
+        const PetColorEntry* green = FindColor("green");
+        if (green != nullptr) {
+            strip_->SetMoodFx(green->red, green->green, green->blue, 6, PET_MOOD_FX_BREATHE);
+        }
+    }
+    Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS);
+
+    /* 3.5 秒后回归当前状态的 L1（一次性定时器，不常驻） */
+    static esp_timer_handle_t restore_timer = nullptr;
+    auto restore_cb = [](void*) {
+        auto* self = s_instance_;
+        if (self != nullptr) {
+            self->ApplyStateL1(self->current_state_.c_str(),
+                               pet_remind::DndActive(esp_timer_get_time() / 1000) ? 1 : 0);
+        }
+    };
+    if (restore_timer == nullptr) {
+        esp_timer_create_args_t args = {};
+        args.callback = restore_cb;
+        args.dispatch_method = ESP_TIMER_TASK;
+        args.name = "pet_celebrate";
+        esp_timer_create(&args, &restore_timer);
+    } else {
+        esp_timer_stop(restore_timer);
+    }
+    esp_timer_start_once(restore_timer, 3500 * 1000);
+}
+
+/* /api/map 数据源：固件与看板共用同一份映射表 */
+std::string PetTools::GetStateMapJson() const {
+    std::string out;
+    out.reserve(1024);
+    out += "{\"map_ver\":1,\"states\":[";
+    for (int i = 0; i < kStateMapCount; i++) {
+        const StateMapEntry& e = kStateMap[i];
+        if (i > 0) {
+            out += ",";
+        }
+        char buf[224];
+        snprintf(buf, sizeof(buf),
+                 "{\"state\":\"%s\",\"face\":\"%s\",\"color\":\"%s\",\"level\":%d,"
+                 "\"fx\":\"%s\",\"caption\":\"%s\",\"worsening\":%s}",
+                 e.state, e.face, e.color, e.level,
+                 e.fx == PET_MOOD_FX_BLINK   ? "blink"
+                 : e.fx == PET_MOOD_FX_PULSE ? "pulse"
+                 : e.fx == PET_MOOD_FX_RUN   ? "run"
+                 : e.fx == PET_MOOD_FX_FADE  ? "fade"
+                 : e.fx == PET_MOOD_FX_BREATHE ? "breathe"
+                 : e.fx == PET_MOOD_FX_OFF   ? "off"
+                                             : "solid",
+                 e.caption, e.worsening ? "true" : "false");
+        out += buf;
+    }
+    out += "]}";
+    return out;
+}
+
+/*
+ * 对账 watchdog（映射设计「60s 对账，治长期无响应」）：
+ * 板级 2s 定时器调用，内部 60s 节流。
+ *   1. 静默 sync 一次状态 —— 数值自然衰减引发的状态变化也能触发换脸换灯
+ *      （此前只在动作返回时联动，正是「脱节」根源）；
+ *   2. 手动灯保护期到期后补上被 defer 的状态；
+ *   3. 脸/灯跑偏（被 AI/别的路径改掉）强行拉回映射表。
+ */
+void PetTools::WatchdogTick() {
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    if (last_watchdog_ms_ != 0 && now_ms - last_watchdog_ms_ < 60 * 1000) {
+        return;
+    }
+    last_watchdog_ms_ = now_ms;
+
+    /* 静默 sync：动作事件走 ReactToEvents（hook 里已接） */
+    PetActionResult r = cloud_.Act("sync", "");
+    if (r.from_cloud) {
+        ReactToEvents(r);
+        last_status_ms_ = 0; /* 30s 状态缓存作废 */
+    }
+
+    /* 对账：脸/灯是否还和映射表一致（手动保护期内不纠） */
+    if (now_ms < manual_mood_until_ms_) {
+        return;
+    }
+    const StateMapEntry* entry = FindStateMap(current_state_.c_str());
+    if (entry == nullptr) {
+        return;
+    }
+    bool face_drift = (face_ != entry->face);
+    bool light_drift = (strip_ != nullptr && mood_name_ != entry->color);
+    if (face_drift || light_drift) {
+        ESP_LOGI(TAG, "PET_PATCH: watchdog reconcile state=%s face %s->%s light %s->%s",
+                 current_state_.c_str(), face_.c_str(), entry->face, mood_name_.c_str(),
+                 entry->color);
+        ApplyStateL1(current_state_.c_str(), pet_remind::DndActive(now_ms) ? 1 : 0);
+    }
 }
 
 void PetTools::RegisterCloudTools() {

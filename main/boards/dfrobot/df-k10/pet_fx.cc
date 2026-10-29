@@ -198,6 +198,32 @@ void PetFxLayer::BuildShape(Slot& s, PetFxKind kind, int x, int y) {
             lv_obj_set_pos(s.parts[1], 21, 24);
             break;
         }
+        case PET_FX_SWEAT: {
+            /* 汗滴：偏侧泪滴形（圆 + 斜短条），比泪滴小、更侧 */
+            s.parts[0] = MakeCircle(s.root, 4, kSky);
+            lv_obj_set_pos(s.parts[0], 14, 14);
+            s.parts[1] = MakeBar(s.root, 5, 7, 200, kSky);
+            lv_obj_set_pos(s.parts[1], 15, 21);
+            break;
+        }
+        case PET_FX_NOTE: {
+            /* 音符 = 符头圆 + 符干竖条 */
+            s.parts[0] = MakeCircle(s.root, 5, kButter);
+            lv_obj_set_pos(s.parts[0], 14, 26);
+            s.parts[1] = MakeBar(s.root, 3, 18, 0, kButter);
+            lv_obj_set_pos(s.parts[1], 18, 10);
+            s.parts[2] = MakeBar(s.root, 9, 3, 0, kButter);
+            lv_obj_set_pos(s.parts[2], 18, 10);
+            break;
+        }
+        case PET_FX_EXCLAIM: {
+            /* 感叹号 = 粗竖条 + 下方圆点 */
+            s.parts[0] = MakeBar(s.root, 5, 18, 0, kPinkDeep);
+            lv_obj_set_pos(s.parts[0], 21, 8);
+            s.parts[1] = MakeCircle(s.root, 3, kPinkDeep);
+            lv_obj_set_pos(s.parts[1], 21, 30);
+            break;
+        }
     }
 }
 
@@ -217,9 +243,9 @@ void PetFxLayer::Spawn(PetFxKind kind, int x, int y) {
     slot->busy = true;
     BuildShape(*slot, kind, x, y);
 
-    /* 动画：平移 + 淡出。泪滴向下、其它向上飘；星星带轻微横摆。 */
-    const int dur = (kind == PET_FX_TEAR) ? 1500 : 1200;
-    const int dy = (kind == PET_FX_TEAR) ? 60 : -50;
+    /* 动画：平移 + 淡出。泪滴/汗滴向下、其它向上飘；星星带轻微横摆。 */
+    const int dur = (kind == PET_FX_TEAR || kind == PET_FX_SWEAT) ? 1500 : 1200;
+    const int dy = (kind == PET_FX_TEAR || kind == PET_FX_SWEAT) ? 60 : -50;
     const int dx =
         (kind == PET_FX_HEART) ? static_cast<int>(esp_random() % 21) - 10 : 0;
 

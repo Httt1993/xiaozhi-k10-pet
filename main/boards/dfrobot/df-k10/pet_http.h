@@ -3,6 +3,8 @@
 
 #include "pet_cloud.h"
 
+class PetTools;
+
 /*
  * 家长看板 HTTP 服务（设备端）
  * =================================================================
@@ -15,6 +17,9 @@
  *   GET  /api/info   设备信息（免 PIN）
  *   GET  /api/state  宠物状态（PIN）
  *   POST /api/cmd    执行动作（PIN + seq 幂等）
+ *   GET  /api/map    状态→表情+LED 映射表（免 PIN，看板画脸小样/灯色用）
+ *   GET  /api/remind 提醒状态（级别/免打扰/补播队列，PIN）
+ *   POST /api/remind/cmd  提醒指令（PIN）：cheer / dnd_on / dnd_off / checkin / calm
  *
  * 安全：
  *   PIN 走 x-pin 头或 ?pin= 查询参数（与模拟器一致）
@@ -28,7 +33,7 @@
  */
 
 /** 启动 HTTP 看板服务（WiFi 就绪后调一次）。返回 0=成功。 */
-int PetHttpStart(PetCloud* cloud, const char* pin);
+int PetHttpStart(PetCloud* cloud, const char* pin, PetTools* tools = nullptr);
 
 /** 停止服务（可选，一般不需要）。 */
 void PetHttpStop();

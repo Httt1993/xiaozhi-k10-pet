@@ -9,6 +9,21 @@
 #include "device_state.h"
 
 /*
+ * 灯效模式（状态→表情+LED 联动映射设计 · SECTION 06）。
+ * 原则「越急动得越快、越好越收敛」：
+ *   病=缓慢明灭(求助信号) / 饿极=急促呼吸 / 平静=慢呼吸 / 状态好=收敛或熄灭。
+ */
+enum PetMoodFx {
+    PET_MOOD_FX_OFF = 0,   /* 熄灭 */
+    PET_MOOD_FX_SOLID,     /* 常亮 */
+    PET_MOOD_FX_BREATHE,   /* 慢呼吸（3.2s 往返，25%~100%） */
+    PET_MOOD_FX_PULSE,     /* 急促呼吸（1.2s 往返，55%~100%） */
+    PET_MOOD_FX_BLINK,     /* 明灭（方波亮/灭，约 1.2s 一周期） */
+    PET_MOOD_FX_RUN,       /* 跑马（亮斑绕 3 颗灯转） */
+    PET_MOOD_FX_FADE,      /* 慢渐变（4.8s 往返，0%~100%） */
+};
+
+/*
  * PetStrip —— 让宠物心情灯「一直亮着」。
  *
  * 原版 CircularStrip 有几个坑，导致 AI 设的颜色总是自己消失：
@@ -41,12 +56,16 @@ public:
     /* r/g/b 为 0-255，level 1-10 用于整体压暗，breathe=true 走缓慢呼吸 */
     void SetMood(uint8_t red, uint8_t green, uint8_t blue, int level, bool breathe,
                  bool persist = true);
+    /* 完整灯效版：fx 决定动效（明灭/跑马/急促呼吸…），联动映射表用这个 */
+    void SetMoodFx(uint8_t red, uint8_t green, uint8_t blue, int level, PetMoodFx fx,
+                   bool persist = true);
     void ClearMood();
 
     bool mood_active() const { return mood_active_; }
     bool mood_suppressed() const { return mood_suppressed_; }
     const StripColor& mood_color() const { return mood_color_; }
     bool mood_breathe() const { return mood_breathe_; }
+    PetMoodFx mood_fx() const { return mood_fx_; }
     int mood_level() const { return mood_level_; }
 
     void OnStateChanged() override;
@@ -62,6 +81,7 @@ private:
     /* clear_mood 之后为 true：所有状态都保持黑，重启也保持黑 */
     bool mood_suppressed_ = false;
     bool mood_breathe_ = false;
+    PetMoodFx mood_fx_ = PET_MOOD_FX_BREATHE;
     int mood_level_ = 5;
     StripColor mood_raw_ = {0, 0, 0};    /* 未按 level 压暗的原始色 */
     StripColor mood_color_ = {0, 0, 0};  /* 实际点亮的颜色 */

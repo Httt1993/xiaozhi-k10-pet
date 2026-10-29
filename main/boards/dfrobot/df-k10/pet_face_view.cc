@@ -11,9 +11,11 @@
 #include "pet_config.h"
 #include "pet_emotion.h"
 #include "pet_face.h"
+#include "pet_remind.h"
 #if PET_MOTION_ENABLE
 #include "pet_motion.h"
 #endif
+#include <esp_timer.h>
 
 #define TAG "PetFaceView"
 
@@ -1104,6 +1106,8 @@ void PetFaceView::Tick() {
         PetMotionEvent evs[8];
         const int n = PetMotionDrain(evs, 8);
         for (int i = 0; i < n; i++) {
+            /* 体感 = 孩子动手了 → 提醒链记「响应」/解除静置闸（SECTION 07） */
+            pet_remind::OnMotion(static_cast<int>(evs[i]), esp_timer_get_time() / 1000);
             switch (evs[i]) {
                 case PET_MOTION_FALL:
                     PetEmotion().Fire(PET_MOOD_SCARED,

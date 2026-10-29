@@ -14,6 +14,7 @@
 #include "pet_config.h"
 #include "pet_motion.h"
 #include "pet_http.h"     // PET_PATCH: 家长看板 HTTP 服务
+#include "pet_remind.h"   // PET_PATCH: 儿童状态提醒升级链 + 免打扰
 #include "sd_probe.h"
 #include "assets/lang_config.h"
 
@@ -276,7 +277,7 @@ private:
         // 无加速度时内部自动停摆，不影响开机。
         PetMotionInit(&pet_tools_->sensors());
         // PET_PATCH: 启动家长看板 HTTP 服务（WiFi 起来后手机浏览器连 k10-pet.local）
-        PetHttpStart(&pet_tools_->cloud(), "1234");
+        PetHttpStart(&pet_tools_->cloud(), "1234", pet_tools_);
         // PET_PATCH: 每 2 秒把宠物属性推到底部属性栏（饱食/心情/精力/金币）
         {
             esp_timer_handle_t stats_timer = nullptr;
@@ -293,6 +294,9 @@ private:
                 self->display_->SetTaskBadge(self->pet_tools_->cloud().CountOpenTasks());
                 /* 光感看护（A-15）：手电/遮挡触发表情反馈，顺同一节拍轮询 */
                 self->pet_tools_->WatchLightTick();
+                /* 提醒升级链 + 免打扰闸门（2s 节拍驱动；内部各带节流） */
+                pet_remind::Tick(esp_timer_get_time() / 1000);
+                self->pet_tools_->WatchdogTick();
                 /* A-08/B-01 修复：WiFi 连上后把看板地址弹一次到屏幕上，
                  * 手机不用连串口也能知道该输什么地址。 */
                 {

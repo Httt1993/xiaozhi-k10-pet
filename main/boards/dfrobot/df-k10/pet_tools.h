@@ -63,6 +63,16 @@ public:
      * 由板级 2 秒定时器轮询调用（测试项 A-15「光感互动孔」）。 */
     void WatchLightTick();
 
+    /* 对账 watchdog（映射设计 6 触发点之一）：每 60s 静默 sync 一次状态，
+     * 衰减导致的状态变化也换脸换灯；脸/灯跑偏了强行拉回。板级定时器调用。 */
+    void WatchdogTick();
+
+    /* pet_remind 钩子回调（也给看板 /api/map 用） */
+    void ApplyStateL1(const char* state, int calm);
+    void Celebrate(int ms);
+    std::string GetStateMapJson() const;
+    const char* current_state() const { return current_state_.c_str(); }
+
 private:
 
     int level_ = 5;
@@ -80,6 +90,12 @@ private:
     // 状态缓存：30 秒内重复问状态就不再打云端，避免一句话触发多次网络往返
     int64_t last_status_ms_ = 0;
     std::string last_react_event_;  // 上一次联动用的最高优先级事件
+
+    // 状态→表情+LED 联动（映射设计）
+    std::string current_state_ = "normal";  // 当前映射状态（sick/starving/...）
+    uint32_t state_rev_ = 0;                // 状态变化序号（看板对账用）
+    int64_t manual_mood_until_ms_ = 0;      // 手动灯 15 分钟保护期截止
+    int64_t last_watchdog_ms_ = 0;
 
     // 光感看护状态（WatchLightTick）
     float last_lux_ = 0.0f;

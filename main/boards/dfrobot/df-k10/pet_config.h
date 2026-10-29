@@ -127,6 +127,13 @@
 #define PET_LIGHT_WATCH 1
 
 /*
+ * 儿童状态提醒（pet_remind）：状态→表情+LED 联动映射 + 五级升级提醒 + 免打扰三道闸。
+ *   1 = 开（默认。设计文档《状态表情LED联动映射设计》《儿童状态提醒生动化设计》）
+ *   0 = 关（只保留原有 ReactToEvents 简版联动，出问题先关这里）
+ */
+#define PET_REMIND_ENABLE 1
+
+/*
  * TF 卡引脚探测（诊断开关）。
  *
  * K10 板上确有自弹式 microSD 卡座，但官方规格页和 wiki 都没给引脚，

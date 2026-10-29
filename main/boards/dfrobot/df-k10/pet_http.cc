@@ -1,5 +1,7 @@
 #include "pet_http.h"
 #include "pet_engine.h"
+#include "pet_remind.h"
+#include "pet_tools.h"
 #include "boot_diag.h"
 
 #include <cJSON.h>
@@ -34,6 +36,7 @@ constexpr int kMaxRequestLine = 512;
 
 /* ───────── 状态 ───────── */
 PetCloud* g_cloud = nullptr;
+PetTools* g_tools = nullptr;
 int g_listen_fd = -1;
 volatile bool g_running = false;
 char g_pin[kMaxPinLen + 1] = {0};
@@ -559,6 +562,49 @@ void HandleCmd(int fd, const std::string& headers, const std::string& body) {
              result.ok ? 1 : 0, result.code.c_str());
 }
 
+/* GET /api/map —— 状态→表情+LED 映射表（看板画脸小样/灯色圆点，保证两端一致） */
+void HandleMap(int fd) {
+    if (g_tools == nullptr) {
+        SendJson(fd, 500, "{\"ok\":false,\"code\":\"NOT_READY\"}");
+        return;
+    }
+    SendJson(fd, 200, g_tools->GetStateMapJson());
+}
+
+/* GET /api/remind —— 提醒链状态（级别/免打扰/补播队列） */
+void HandleRemind(int fd, const std::string& headers) {
+    if (!CheckPinFromHeaders(headers)) {
+        SendJson(fd, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
+        return;
+    }
+    SendJson(fd, 200, pet_remind::StatusJson(NowSec() * 1000));
+}
+
+/* POST /api/remind/cmd —— 提醒指令：cheer / dnd_on / dnd_off / checkin / calm */
+void HandleRemindCmd(int fd, const std::string& headers, const std::string& body) {
+    if (!CheckPinFromHeaders(headers)) {
+        SendJson(fd, 401, "{\"ok\":false,\"code\":\"NO_PIN\"}");
+        return;
+    }
+    if (body.empty() || body.size() > kMaxRequestBody) {
+        SendJson(fd, 400, "{\"ok\":false,\"code\":\"BAD_REQUEST\"}");
+        return;
+    }
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (!root) {
+        SendJson(fd, 400, "{\"ok\":false,\"code\":\"BAD_JSON\"}");
+        return;
+    }
+    const char* cmd = cJSON_GetObjectItem(root, "cmd")
+                          ? cJSON_GetObjectItem(root, "cmd")->valuestring : nullptr;
+    const char* arg = cJSON_GetObjectItem(root, "arg")
+                          ? cJSON_GetObjectItem(root, "arg")->valuestring : nullptr;
+    bool ok = pet_remind::Command(cmd, arg, NowSec() * 1000);
+    cJSON_Delete(root);
+    SendJson(fd, ok ? 200 : 400,
+             ok ? "{\"ok\":true}" : "{\"ok\":false,\"code\":\"BAD_CMD\"}");
+}
+
 /* ───────── HTTP 服务主循环 ───────── */
 
 /*
@@ -581,6 +627,12 @@ static void PetHttpClientTask(void* arg) {
             HandleInfo(client_fd);
         } else if (req.uri == "/api/state" || req.uri.find("/api/state?") == 0) {
             HandleState(client_fd, req.headers);
+        } else if (req.uri == "/api/map" || req.uri.find("/api/map?") == 0) {
+            HandleMap(client_fd);
+        } else if (req.uri == "/api/remind" || req.uri.find("/api/remind?") == 0) {
+            HandleRemind(client_fd, req.headers);
+        } else if (req.uri == "/api/remind/cmd" && req.method == "POST") {
+            HandleRemindCmd(client_fd, req.headers, req.body);
         } else if (req.uri == "/api/cmd" && req.method == "POST") {
             HandleCmd(client_fd, req.headers, req.body);
         } else {
@@ -696,12 +748,13 @@ static void PetHttpTask(void* arg) {
 
 /* ───────── 对外接口 ───────── */
 
-int PetHttpStart(PetCloud* cloud, const char* pin) {
+int PetHttpStart(PetCloud* cloud, const char* pin, PetTools* tools) {
     if (g_running) {
         ESP_LOGW(TAG, "HTTP server already running");
         return 0;
     }
     g_cloud = cloud;
+    g_tools = tools;
     if (pin && pin[0]) {
         strncpy(g_pin, pin, kMaxPinLen);
         g_pin[kMaxPinLen] = '\0';
