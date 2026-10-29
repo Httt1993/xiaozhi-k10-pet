@@ -107,7 +107,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: k10-pet-firmware
-          path: build/merged-binary.bin
+          path: |
+            build/merged-binary.bin
+            build/xiaozhi.map
           if-no-files-found: error
           retention-days: 14
 
