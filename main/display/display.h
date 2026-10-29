@@ -66,6 +66,13 @@ public:
         (void)name;
         return false;
     }
+    /* PET_PATCH: 状态基线表情（生病/饿了等持续态）——不被对话态 8s 回落冲掉 */
+    virtual bool SetPetStateFace(const char* name) {
+        (void)name;
+        return false;
+    }
+    /* PET_PATCH: 当前实际显示的表情名（watchdog 对账用；默认空 = 查不到） */
+    virtual const char* GetPetFace() { return ""; }
     virtual const char* PetFaceList() { return ""; }
     /* PET_PATCH: 更新底部属性栏（饱食/心情/精力/金币） */
     virtual void SetPetStats(int hunger, int mood, int energy, int coins) {

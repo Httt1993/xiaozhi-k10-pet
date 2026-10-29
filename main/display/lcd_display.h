@@ -71,6 +71,8 @@ public:
      * （neutral/happy/sad/sick/hungry、开心/难过/生病/饿了）。
      * 返回 false 表示这个表情不存在或本构建未启用猫脸。 */
     bool SetPetFace(const char* name) override;
+    bool SetPetStateFace(const char* name) override;
+    const char* GetPetFace() override;
     /* 返回可用表情清单，给 AI 工具用 */
     const char* PetFaceList() override;
     /* PET_PATCH: 更新底部属性栏 */

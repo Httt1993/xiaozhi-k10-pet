@@ -1185,6 +1185,31 @@ bool LcdDisplay::SetPetFace(const char* name) {
 #endif
 }
 
+bool LcdDisplay::SetPetStateFace(const char* name) {
+#ifdef PET_FACE_AVAILABLE
+    if (pet_face_view_ == nullptr) {
+        return false;
+    }
+    DisplayLockGuard lock(this);
+    return pet_face_view_->SetStateExpression(name);
+#else
+    (void)name;
+    return false;
+#endif
+}
+
+const char* LcdDisplay::GetPetFace() {
+#ifdef PET_FACE_AVAILABLE
+    if (pet_face_view_ == nullptr) {
+        return "";
+    }
+    DisplayLockGuard lock(this);
+    return PetFaceView::ExprName(pet_face_view_->expression());
+#else
+    return "";
+#endif
+}
+
 const char* LcdDisplay::PetFaceList() {
 #ifdef PET_FACE_AVAILABLE
     if (pet_face_view_ != nullptr) {

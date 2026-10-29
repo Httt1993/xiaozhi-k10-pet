@@ -525,7 +525,11 @@ void PetTools::RegisterSensorTools() {
     mcp_server.AddTool(
         "self.pet.get_status",
         "读取宠物的完整状态：饿不饿、有没有力气、心情好不好、有没有生病、有多少游戏币、几级，"
-        "以及屏幕表情和灯色。孩子问『你饿不饿』『你几级了』『你有多少钱』『你哪里不舒服』时调用。"
+        "以及屏幕表情和灯色。凡是孩子问关于【宠物自己】的问题都必须调用它，包括："
+        "『你饿不饿』『是不是饿了』『饿了吗』『你几级了』『你有多少钱』『你哪里不舒服』"
+        "『是不是病了』『你怎么样』『你开心吗』。"
+        "回答时以宠物第一人称把返回的数值说给孩子（例：饱食度只剩 30 → 『我有点饿啦』），"
+        "绝对不要答非所问、也不要以助手身份说『我是 AI 不会饿』。"
         "返回里的 say 是宠物此刻的心声，可以顺着它的话聊。",
         PropertyList(),
         [this](const PropertyList&) -> ToolResult {
@@ -638,9 +642,11 @@ void PetTools::ApplyStateL1(const char* state, int calm) {
         return;
     }
 
-    /* 脸 */
+    /* 脸：走状态基线通道 —— 不登记「对话态」，8 秒后不会被刷回 neutral。
+     * （修「生病/饿了设备表情没有变化」：此前走 SetPetFace 被登记成对话态，
+     *   8s 保持期一到 OnMoodChanged 把脸刷回 neutral，状态脸秒变没反应。） */
     if (display_ != nullptr && FaceExists(entry->face)) {
-        if (display_->SetPetFace(entry->face)) {
+        if (display_->SetPetStateFace(entry->face)) {
             face_ = entry->face;
         }
     }
@@ -758,7 +764,10 @@ void PetTools::WatchdogTick() {
         last_status_ms_ = 0; /* 30s 状态缓存作废 */
     }
 
-    /* 对账：脸/灯是否还和映射表一致（手动保护期内不纠） */
+    /* 对账：脸/灯是否还和映射表一致（手动保护期内不纠）。
+     * 脸必须查「屏幕真实显示的表情」而不是 face_ 缓存 —— 情绪状态机/对话态
+     * 都可能绕过缓存改脸（实测 8s 对话态到期把病脸刷回 neutral，缓存还写着
+     * sick，对账就瞎了，这正是「生病/饿了表情没有变化」的第二处根源）。 */
     if (now_ms < manual_mood_until_ms_) {
         return;
     }
@@ -766,7 +775,14 @@ void PetTools::WatchdogTick() {
     if (entry == nullptr) {
         return;
     }
-    bool face_drift = (face_ != entry->face);
+    const char* shown = display_ != nullptr ? display_->GetPetFace() : "";
+    bool face_drift;
+    if (shown != nullptr && shown[0] != '\0') {
+        /* GetPetFace 返回的是规范名（ExprName），映射表也是规范名，strcmp 足够 */
+        face_drift = (strcmp(shown, entry->face) != 0);
+    } else {
+        face_drift = (face_ != entry->face); /* 查不到真实脸时退回缓存对账 */
+    }
     bool light_drift = (strip_ != nullptr && mood_name_ != entry->color);
     if (face_drift || light_drift) {
         ESP_LOGI(TAG, "PET_PATCH: watchdog reconcile state=%s face %s->%s light %s->%s",
@@ -797,7 +813,8 @@ void PetTools::RegisterCloudTools() {
         "  song     —— 唱歌\n"
         "  teach    —— 学新东西，可选给 what\n"
         "  pet      —— 摸摸头（免费，只加一点点心情）\n"
-        "  chat     —— 只是想聊两句、看看它状态\n"
+        "  chat     —— 只是想闲聊两句。注意：问它饿不饿/病没病/几级/多少钱 这类"
+        "【查它自身状态】的问题不要用 chat，用 self.pet.get_status\n"
         "返回 ok=false 时，code 说明原因（FULL 吃饱了 / NO_COIN 币不够 / NOT_SICK 没生病 /\n"
         "WRONG_MED 吃错药 / DAILY_CAP 今天次数用完），把 say 顺其自然地告诉孩子，不要念 code。\n"
         "返回的 say 是宠物自己的话，用它来回答孩子最自然。",

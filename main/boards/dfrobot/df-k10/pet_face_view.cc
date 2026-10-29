@@ -824,6 +824,27 @@ bool PetFaceView::SetExpression(const char* name) {
     return true;
 }
 
+/*
+ * 状态基线表情（PET_PATCH 状态联动专用）：
+ * 只更新基线 + 立即换脸，不向情绪状态机登记「对话态」。
+ * 这样状态脸（生病/饿了）是持续态，不会 8 秒后被 OnMoodChanged 刷回 neutral。
+ */
+void PetFaceView::SetStateExpression(Expr e) {
+    if (e < 0 || e >= kExprCount) {
+        e = kNeutral;
+    }
+    base_expr_ = e;
+    ApplyExpr(e);
+}
+
+bool PetFaceView::SetStateExpression(const char* name) {
+    if (!Known(name)) {
+        return false;
+    }
+    SetStateExpression(Parse(name));
+    return true;
+}
+
 void PetFaceView::PlaySquash(float sx, float sy, uint32_t ms) {
     if (face_group_ == nullptr) {
         return;
@@ -1087,7 +1108,7 @@ void PetFaceView::OnMoodChanged() {
         case PET_MOOD_CURIOUS:  ApplyExpr(kCurious); break;
         case PET_MOOD_SLEEPY:   ApplyExpr(kSleepy); break;
         case PET_MOOD_PLAYING:  ApplyExpr(kHappy); break;
-        case PET_MOOD_IDLE:     ApplyExpr(kNeutral); break;
+        case PET_MOOD_IDLE:     ApplyExpr(base_expr_); break;  /* 回落到状态基线（病/饿脸），不是 neutral */
         case PET_MOOD_TALKING:  break;  /* 对话态保持 AI 设的表情 */
         default: break;
     }

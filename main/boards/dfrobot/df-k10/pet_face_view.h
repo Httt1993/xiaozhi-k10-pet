@@ -55,6 +55,15 @@ public:
     /* AI / 工具入口：会向情绪状态机登记「对话态」(P2, 8s 衰减) */
     void SetExpression(Expr e);
     bool SetExpression(const char* name);
+
+    /* 状态基线表情（生病/饿了等持续态，PET_PATCH 状态联动专用）：
+     * 不登记「对话态」，所以不会 8 秒后被回落掉；
+     * 情绪（对话/体感）保持期结束后回落到这里，而不是回落到 neutral。
+     * —— 修「生病/饿了设备表情没有变化」：此前状态脸走 SetExpression 被登记成
+     * 对话态，8 秒到期 OnMoodChanged 无脑刷回 neutral，状态脸秒变没反应。 */
+    void SetStateExpression(Expr e);
+    bool SetStateExpression(const char* name);
+
     Expr expression() const { return expr_; }
 
     /* ---- 活物感控制接口（外部事件驱动） ---- */
@@ -217,4 +226,7 @@ private:
 
     /* 上一个情绪（用于切换时触发 FX） */
     int last_mood_ = -1;
+
+    /* 状态基线表情：情绪（对话/体感）保持期结束后回落到这里（而非 neutral） */
+    Expr base_expr_ = kNeutral;
 };
