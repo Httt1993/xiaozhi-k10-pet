@@ -19,7 +19,8 @@ namespace {
 Hooks g_hooks;
 
 /* ---- 当前状态 ---- */
-const char* g_state = "normal";
+/* 必须是 string 拷贝：OnState 的入参常指向临时 events vector，存裸指针必悬空 */
+std::string g_state = "normal";
 Level g_level = LEVEL_OFF;
 int64_t g_level_since_ms = 0;   /* 进入当前级别的时间 */
 int64_t g_l5_until_ms = 0;      /* L5 演完自动退场时间 */
@@ -105,7 +106,7 @@ int HourOf(int64_t now_ms) {
 }
 
 const char* NextVariant() {
-    int idx = StateIdx(g_state);
+    int idx = StateIdx(g_state.c_str());
     const char* text = kSay[idx][g_variant_idx[idx] % 4];
     g_variant_idx[idx]++;
     return text;
@@ -184,7 +185,7 @@ void OnState(const char* state, int64_t now_ms) {
     if (state == nullptr) {
         return;
     }
-    if (strcmp(state, g_state) == 0 && g_level != LEVEL_OFF) {
+    if (state == g_state && g_level != LEVEL_OFF) {
         return; /* 状态没变，链继续 */
     }
 
@@ -405,7 +406,7 @@ std::string StatusJson(int64_t now_ms) {
     snprintf(buf, sizeof(buf),
              "{\"state\":\"%s\",\"level\":%d,\"dnd\":%s,\"dnd_reason\":\"%s\","
              "\"queued\":%d,\"streak\":%d,\"responded\":%s}",
-             g_state, static_cast<int>(g_level), DndActive(now_ms) ? "true" : "false",
+             g_state.c_str(), static_cast<int>(g_level), DndActive(now_ms) ? "true" : "false",
              dnd_reason, queued, g_response_streak,
              g_responded_this_hour ? "true" : "false");
     return std::string(buf);
