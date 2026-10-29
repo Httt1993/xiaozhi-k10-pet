@@ -1147,6 +1147,7 @@ idf_component_register(SRCS ${SOURCES}
                         mbedtls
                         console
                         efuse
+                        espcoredump
                         bt
                         fatfs
                         xiaozhi-fonts

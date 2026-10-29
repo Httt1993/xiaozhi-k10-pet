@@ -48,11 +48,12 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=1024
 #      要存 flash 必须改分区表，风险高。
 # 崩溃时现场从串口输出，配合 serial_log.py 落盘；用 espcoredump.py 解析：
 #   python $IDF_PATH/components/espcoredump/espcoredump.py info_corefile -t raw -c <dump>
+# 注（IDF v6.1）：数据格式固定 ELF、校验固定 SHA256（原 DATA_FORMAT_ELF / CHECKSUM_CRC32
+#   两个键已删除）；espcoredump 组件须在 main/CMakeLists.txt PRIV_REQUIRES 显式引入，
+#   否则其 Kconfig 不进构建树，下面的键会被判 unknown symbol 而静默失效。
 # 若日后想存 flash：需在分区表加 coredump 分区（data, coredump, 建议 256KB），再改回
 #   CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y 并删掉下面 TO_UART 那行。
 CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y
-CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
-CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
 CONFIG_ESP_COREDUMP_UART_DELAY=0
 CONFIG_ESP_COREDUMP_LOGS=y
