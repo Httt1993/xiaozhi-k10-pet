@@ -135,6 +135,31 @@ ok("task-del" in http and "confirm(" in http, "看板任务卡有删除按钮 + 
 ok("cmd('task_delete'" in http, "删除按钮调用 task_delete 动作")
 ok("lastTasks" in http, "任务列表缓存用于按钮定位（防标题注入）")
 
+section("任务确认/退回按钮（2026-10-29 新增：待完成也能直接确认发币）")
+
+ok("task-ok" in http and "cmd('task_approve'" in http,
+   "看板任务卡有「确认」按钮 → task_approve")
+ok("data-ok" in http and "confirm(" in http,
+   "确认前有二次确认弹窗（防误触发币）")
+ok("task-back" in http and "cmd('task_reject'" in http,
+   "看板任务卡有「退回」按钮 → task_reject")
+ok("data-no" in http, "退回按钮走 lastTasks 索引定位")
+ok("st==='done'?'':'" in http or "st==='done')" in http,
+   "已完成任务不再显示确认按钮（只剩删除）")
+ok("st==='submitted'" in http, "退回按钮只在等确认状态出现")
+
+# 云端看板 parent.js / 模拟器看板同款补齐（三处看板行为一致）
+parent_js = read(os.path.join(ROOT, "cloud", "scf", "parent.js"))
+ok("t.status!=='done'" in parent_js and "data-approve" in parent_js,
+   "云端看板：待完成/等确认都有「确认完成，发币」按钮")
+ok("data-reject" in parent_js and "t.status==='submitted'" in parent_js,
+   "云端看板：「还没做完」退回只在等确认时出现")
+
+sim_dash = read(os.path.join(ROOT, "..", "ai-buddy-sim", "public", "dashboard.html"))
+ok("data-ap=" in sim_dash and "确认发币" in sim_dash,
+   "模拟器看板：待完成/等确认都有「确认发币」按钮")
+ok("data-rj=" in sim_dash, "模拟器看板：等确认状态有「退回」按钮")
+
 section("未完成任务角标（设备屏同步）")
 
 ok("CountOpenTasks" in pcl and "int PetCloud::CountOpenTasks" in pcl,

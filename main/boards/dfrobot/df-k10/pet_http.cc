@@ -151,14 +151,23 @@ cursor:pointer;color:#fff;font-weight:600;transition:transform .1s}
 .btn.sleep{background:#8e7cc3}.btn.heal{background:#e06060}
 .btn.story{background:#e8b04b}.btn.pet{background:#e88080}
 .btn.task{background:#5cb87a}.btn.wide{grid-column:span 2}
-.task-item{display:flex;justify-content:space-between;align-items:center;
+.task-item{display:flex;justify-content:space-between;align-items:center;gap:8px;
 padding:8px 0;border-bottom:1px solid #f0e8e0;font-size:14px}
 .task-item:last-child{border:none}
-.badge{font-size:11px;padding:2px 8px;border-radius:8px;color:#fff}
+.task-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-right{display:flex;align-items:center;gap:6px;flex:none}
+.badge{font-size:11px;padding:2px 8px;border-radius:8px;color:#fff;flex:none}
 .badge.pending{background:#e8b04b}.badge.submitted{background:#6bb5e8}
 .badge.done{background:#5cb87a}
+.task-coins{color:#e89b4b;font-weight:700;font-size:12.5px;flex:none}
+.task-ok{border:none;background:#5cb87a;color:#fff;font-size:12px;font-weight:600;
+padding:5px 12px;border-radius:8px;cursor:pointer;flex:none}
+.task-ok:hover{background:#4a9e63}.task-ok:active{transform:scale(.95)}
+.task-back{border:none;background:#e8b04b;color:#fff;font-size:12px;font-weight:600;
+padding:5px 12px;border-radius:8px;cursor:pointer;flex:none}
+.task-back:hover{background:#d19a38}.task-back:active{transform:scale(.95)}
 .task-del{border:none;background:#f0dcc8;color:#b07050;width:26px;height:26px;
-border-radius:8px;font-size:13px;margin-left:8px;cursor:pointer;flex:none}
+border-radius:8px;font-size:13px;cursor:pointer;flex:none}
 .task-del:hover{background:#e8c4a8}.task-del:active{background:#d8b090}
 #pin-overlay{position:fixed;inset:0;background:rgba(245,240,235,.97);
 display:flex;align-items:center;justify-content:center;z-index:10}
@@ -263,10 +272,23 @@ finally{pollBusy=false}}
 let lastTasks=[];
 function renderTasks(tasks){const el=$('task-list');lastTasks=tasks;
 if(!tasks.length){el.innerHTML='<div style="color:#b09070;text-align:center;padding:12px">暂无任务</div>';return}
-el.innerHTML=tasks.map((t,i)=>`<div class="task-item"><span>${t.title}</span>
-<div><span class="badge ${t.status}">${t.status==='pending'?'待完成':t.status==='submitted'?'等确认':'已完成'}</span>
-<span style="margin-left:6px;color:#e89b4b;font-weight:700">${t.reward}币</span>
-<button class="task-del" data-i="${i}" title="删除任务">✕</button></div></div>`).join('');
+el.innerHTML=tasks.map((t,i)=>{const st=t.status||'pending';
+const sm=st==='pending'?'待完成':st==='submitted'?'等确认':'已完成';
+/* 确认按钮：待完成/等确认都给 —— 孩子做完不用先报备小智，家长看一眼直接点确认发币；
+   退回按钮：只在等确认时给（孩子报备了但没做完）；已完成只剩删除 */
+const okBtn=(st==='done')?'':'<button class="task-ok" data-ok="'+i+'">✓ 确认</button>';
+const backBtn=(st==='submitted')?'<button class="task-back" data-no="'+i+'">退回</button>':'';
+return '<div class="task-item"><div class="task-title">'+t.title+'</div>'+
+'<div class="task-right"><span class="badge '+st+'">'+sm+'</span>'+
+'<span class="task-coins">'+t.reward+'币</span>'+okBtn+backBtn+
+'<button class="task-del" data-i="'+i+'" title="删除任务">✕</button></div></div>';}).join('');
+el.querySelectorAll('.task-ok').forEach(b=>{b.onclick=()=>{
+const t=lastTasks[+b.dataset.ok];if(!t)return;
+if(!confirm('确认「'+t.title+'」完成并发 '+t.reward+' 币？'))return;
+cmd('task_approve',{task_id:t.id||'',title:t.title});};});
+el.querySelectorAll('.task-back').forEach(b=>{b.onclick=()=>{
+const t=lastTasks[+b.dataset.no];if(!t)return;
+cmd('task_reject',{task_id:t.id||'',title:t.title});};});
 el.querySelectorAll('.task-del').forEach(b=>{b.onclick=()=>{
 const t=lastTasks[+b.dataset.i];if(!t)return;
 if(!confirm('确定删除任务「'+t.title+'」吗？\n删除后不可恢复。'))return;

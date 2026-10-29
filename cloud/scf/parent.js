@@ -238,10 +238,13 @@ function render(){
       var sm={pending:'等孩子完成',submitted:'等家长确认',done:'已完成'}[t.status]||t.status;
       html+='<div class="task"><div class="t"><span>'+t.title+'</span><em>+'+t.reward+'</em></div>'+
         '<div class="s">'+sm+'</div>';
-      if(t.status==='submitted'){
+      /* 待完成/等确认都给「确认发币」：孩子做完不用先报备小智，家长看一眼直接点；
+         「还没做完」只在等确认时给（孩子报备了但实际没做完，退回去） */
+      if(t.status!=='done'){
         html+='<div class="mini">'+
           '<button class="ok" data-approve="'+t.id+'">确认完成，发币</button>'+
-          '<button class="no" data-reject="'+t.id+'">还没做完</button></div>';
+          (t.status==='submitted'?'<button class="no" data-reject="'+t.id+'">还没做完</button>':'')+
+          '</div>';
       }
       html+='</div>';
     }
