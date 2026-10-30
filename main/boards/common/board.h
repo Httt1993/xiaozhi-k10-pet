@@ -82,6 +82,14 @@ public:
     virtual void SetPowerSaveLevel(PowerSaveLevel level) = 0;
     virtual std::string GetBoardJson() = 0;
     virtual std::string GetDeviceStatusJson() = 0;
+
+    /* PET_PATCH: 语音反馈钩子（默认空实现，板级按需覆写）
+     *   OnWakeWordDetected —— 唤醒词命中（宠物可以有「我听到啦」的反应）
+     *   OnVoiceActivity    —— 远场人声开始/结束（有人说话 = 有人在）
+     *   OnUserSpeech       —— ASR 文本回来了（本地命令词快路径入口） */
+    virtual void OnWakeWordDetected(const char* wake_word) { (void)wake_word; }
+    virtual void OnVoiceActivity(bool speaking) { (void)speaking; }
+    virtual bool OnUserSpeech(const char* text) { (void)text; return false; }
 };
 
 #define DECLARE_BOARD(BOARD_CLASS_NAME) \

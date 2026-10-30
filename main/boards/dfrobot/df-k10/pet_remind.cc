@@ -7,6 +7,7 @@
 
 #include "pet_config.h"
 #include "pet_motion.h"
+#include "pet_engage.h"
 
 #define TAG "PetRemind"
 
@@ -348,17 +349,15 @@ bool ParentDnd() {
 }
 
 bool DndActive(int64_t now_ms) {
-    /* 三道闸：时段 / 家长开关 / 静置 10 分钟 */
+    /* 三道闸：时段 / 家长开关 / 静默门（AttentionGate：静止没人在动它、也没人说话）。
+     * 静置闸从「10 分钟」收紧为设计稿的「静止 20s 即静默」，由 pet_engage 统一判定。 */
     if (IsNight(now_ms)) {
         return true;
     }
     if (g_parent_dnd) {
         return true;
     }
-    if (now_ms - g_last_touch_ms > kStillGateMs) {
-        return true;
-    }
-    return false;
+    return !pet_engage::Engaged(now_ms);
 }
 
 void QueueRemote(const char* text, int64_t now_ms) {

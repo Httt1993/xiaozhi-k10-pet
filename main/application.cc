@@ -111,6 +111,8 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        /* PET_PATCH: 有人主动说话 = 有人在 → 推静默门（轻进门） */
+        Board::GetInstance().OnVoiceActivity(speaking);
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     callbacks.on_playback_drained = [this]() {
@@ -715,6 +717,8 @@ void Application::InitializeProtocol() {
                     glyphs.clear();
                 }
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+                /* PET_PATCH: 说出口的话 = 有人在（续交互窗）；命令词本地直达 */
+                Board::GetInstance().OnUserSpeech(text->valuestring);
                 Schedule([display, message = std::string(text->valuestring),
                           glyphs = std::move(glyphs), bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
@@ -956,6 +960,9 @@ void Application::HandleWakeWordDetectedEvent() {
     auto state = GetDeviceState();
     auto wake_word = audio_service_.GetLastWakeWord();
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
+
+    /* PET_PATCH: 唤醒词 = 强推静默门 + 宠物见面礼（好奇脸+青闪+轻响） */
+    Board::GetInstance().OnWakeWordDetected(wake_word.c_str());
 
     if (state == kDeviceStateIdle) {
         BeginWakeWordInvoke(wake_word);

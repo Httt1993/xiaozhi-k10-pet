@@ -2,6 +2,7 @@
 #include "pet_engine.h"
 #include "pet_remind.h"
 #include "pet_tools.h"
+#include "pet_engage.h"
 #include "boot_diag.h"
 
 #include <cJSON.h>
@@ -453,6 +454,13 @@ void HandleState(int fd, const std::string& headers) {
 
     cJSON_AddStringToObject(root, "say", st.mood_word.c_str());
     cJSON_AddNumberToObject(root, "server_ts", (double)NowSec());
+
+    /* 静默门状态（《完善设计》SECTION 04）：看板显示「静默/交互中」徽标用 */
+    {
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        cJSON_AddStringToObject(root, "attention",
+                                pet_engage::Engaged(now_ms) ? "engaged" : "silent");
+    }
 
     /* 任务清单 */
     {

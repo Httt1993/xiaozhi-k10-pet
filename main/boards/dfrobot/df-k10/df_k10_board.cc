@@ -13,6 +13,7 @@
 #include "pet_tools.h"
 #include "pet_config.h"
 #include "pet_motion.h"
+#include "pet_engage.h"   // PET_PATCH: 静默门（AttentionGate）
 #include "pet_http.h"     // PET_PATCH: 家长看板 HTTP 服务
 #include "pet_remind.h"   // PET_PATCH: 儿童状态提醒升级链 + 免打扰
 #include "sd_probe.h"
@@ -471,6 +472,36 @@ public:
 
     virtual Display *GetDisplay() override {
         return display_;
+    }
+
+    /* PET_PATCH: 语音反馈钩子 —— 唤醒/人声/说话推静默门，命令词本地直达 */
+    virtual void OnWakeWordDetected(const char* wake_word) override {
+        ESP_LOGI(TAG, "PET_PATCH: wake hook: %s", wake_word != nullptr ? wake_word : "");
+        /* 唤醒 = 强进门（见面礼：好奇脸+青闪+轻响），无需任何手动操作 */
+        pet_engage::NoteActivity(1, esp_timer_get_time() / 1000);
+    }
+
+    virtual void OnVoiceActivity(bool speaking) override {
+        if (speaking) {
+            /* 有人主动说话 = 有人在 → 轻进门（只青闪，不换脸不出声） */
+            pet_engage::NoteActivity(0, esp_timer_get_time() / 1000);
+        }
+    }
+
+    virtual bool OnUserSpeech(const char* text) override {
+        pet_engage::NoteActivity(0, esp_timer_get_time() / 1000);
+        if (text == nullptr || text[0] == '\0') {
+            return false;
+        }
+        /* 命令词执行可能调 Act()，投到主任务跑，别堵协议线程 */
+        std::string t = text;
+        Application::GetInstance().Schedule([t]() {
+            auto* self = Df_K10Board::instance_;
+            if (self != nullptr && self->pet_tools_ != nullptr) {
+                self->pet_tools_->HandleSpokenCommand(t.c_str());
+            }
+        });
+        return true;
     }
 };
 

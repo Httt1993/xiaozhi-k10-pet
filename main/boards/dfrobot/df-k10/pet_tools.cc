@@ -3,6 +3,7 @@
 #include "pet_face_view.h"
 #include "pet_motion.h"
 #include "pet_remind.h"
+#include "pet_engage.h"
 #include "mcp_server.h"
 #include "display/lvgl_display/lvgl_theme.h"
 
@@ -14,6 +15,7 @@
 #include <cJSON.h>
 #include <cstdio>
 #include <cstring>
+#include <strings.h>
 #include <string>
 #include <vector>
 
@@ -117,11 +119,13 @@ struct StateMapEntry {
 };
 const StateMapEntry kStateMap[] = {
     {"sick",     "sick",    "red",         6, PET_MOOD_FX_BLINK,   "头昏昏的……需要治疗", true},
-    {"starving", "hungry",  "warm_orange", 8, PET_MOOD_FX_PULSE,   "饿得不行了！",       true},
+    /* 饿极=哭脸（crying→sad 槽位的嚎哭渲染）：和饥饿的「张嘴期待」拉开差 */
+    {"starving", "crying",  "warm_orange", 8, PET_MOOD_FX_PULSE,   "饿得不行了！",       true},
     {"hungry",   "hungry",  "warm_orange", 5, PET_MOOD_FX_BREATHE, "肚子饿了",           false},
-    {"tired",    "sad",     "blue",        4, PET_MOOD_FX_BREATHE, "累了想休息",         false},
+    /* 疲倦=困脸（不是难过）；无聊=歪头好奇（不是平静）——《完善设计》3.2 校准 */
+    {"tired",    "sleepy",  "blue",        4, PET_MOOD_FX_BREATHE, "累了想休息",         false},
     {"sad",      "sad",     "blue",        4, PET_MOOD_FX_BREATHE, "心情不好……",         false},
-    {"bored",    "neutral", "sky_blue",    4, PET_MOOD_FX_SOLID,   "有点无聊",           false},
+    {"bored",    "curious", "sky_blue",    4, PET_MOOD_FX_SOLID,   "有点无聊",           false},
     {"great",    "happy",   "green",       3, PET_MOOD_FX_BREATHE, "今天状态超好！",     false},
     {"normal",   "neutral", "off",         1, PET_MOOD_FX_OFF,     "",                   false},
 };
@@ -151,6 +155,42 @@ const char* StateFromEvents(const std::vector<std::string>& events) {
 
 /* Celebrate 的一次性恢复定时器要回调实例方法 */
 PetTools* s_instance_ = nullptr;
+
+/* 表情别名 → 规范槽位名。GetPetFace 返回规范名（ExprName），而映射表里
+ * starving 用的是别名「crying」（渲染=难过的嚎哭）—— 对账前先归一化，
+ * 否则 watchdog 每 60s 误判一次「脸跑偏」。 */
+const char* CanonFace(const char* name) {
+    if (name == nullptr) {
+        return "";
+    }
+    if (strcasecmp(name, "crying") == 0) return "sad";
+    if (strcasecmp(name, "laughing") == 0) return "happy";
+    if (strcasecmp(name, "delicious") == 0) return "hungry";
+    if (strcasecmp(name, "ill") == 0) return "sick";
+    if (strcasecmp(name, "tired") == 0) return "sleepy";
+    return name;
+}
+
+/* 一次性定时器：ms 后把脸+灯拉回当前状态的 L1（进门见面礼 / 庆祝用） */
+void ScheduleRestoreState(int ms) {
+    static esp_timer_handle_t restore = nullptr;
+    auto cb = [](void*) {
+        auto* self = s_instance_;
+        if (self != nullptr) {
+            self->ApplyStateL1(self->current_state(),
+                               pet_remind::DndActive(esp_timer_get_time() / 1000) ? 1 : 0);
+        }
+    };
+    if (restore == nullptr) {
+        esp_timer_create_args_t args = {};
+        args.callback = cb;
+        args.dispatch_method = ESP_TIMER_TASK;
+        args.name = "pet_restore";
+        esp_timer_create(&args, &restore);
+    }
+    esp_timer_stop(restore); /* 连续进门/庆祝：后到的重排，只留一次恢复 */
+    esp_timer_start_once(restore, static_cast<uint64_t>(ms) * 1000ULL);
+}
 
 }  // namespace
 
@@ -195,6 +235,45 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
         pet_remind::Init(esp_timer_get_time() / 1000);
     }
 
+    /* 注意力门控（静默门）：进门见面礼 / 出门回静默规格。
+     * 钩子由 pet_face_view Tick 在 LVGL 线程 Flush 触发，这里只做 UI 演出。 */
+    {
+        pet_engage::SetHooks(
+            [](int strong) {
+                auto* self = s_instance_;
+                if (self == nullptr) {
+                    return;
+                }
+                int64_t now_ms = esp_timer_get_time() / 1000;
+                ESP_LOGI(TAG, "PET_PATCH: engage enter strong=%d", strong);
+                /* 青色单闪：「我看到你了」的耳语级确认 */
+                const PetColorEntry* cyan = FindColor("cyan");
+                if (cyan != nullptr && self->strip_ != nullptr) {
+                    self->strip_->SetMoodFx(cyan->red, cyan->green, cyan->blue, 5,
+                                            PET_MOOD_FX_BLINK);
+                }
+                if (strong) {
+                    /* 拿起/唤醒词：好奇脸 + 轻响（人声进门只青闪，不换脸不出声） */
+                    if (self->display_ != nullptr) {
+                        self->display_->SetPetFace("curious");
+                    }
+                    Application::GetInstance().PlaySound(Lang::Sounds::OGG_POPUP);
+                }
+                /* 到点回状态四件套（交互态灯效规格） */
+                ScheduleRestoreState(PET_ATTN_ENTER_FACE_MS);
+            },
+            []() {
+                auto* self = s_instance_;
+                if (self == nullptr) {
+                    return;
+                }
+                ESP_LOGI(TAG, "PET_PATCH: engage exit -> silent");
+                /* 出门：立即压回静默规格（灯效封顶慢呼吸/低亮、无字幕） */
+                self->ApplyStateL1(self->current_state(), 1);
+            });
+        pet_engage::Init(esp_timer_get_time() / 1000);
+    }
+
     /* 开机即对齐状态（映射设计 6 触发点之一）：NVS 里恢复的宠物状态直接演出来，
      * 不用等第一次动作/说话。 */
     {
@@ -226,7 +305,9 @@ PetTools::PetTools(PetStrip* strip, Display* display, i2c_master_bus_handle_t i2
         if (quiet) {
             return;
         }
-        if (display_ != nullptr && !r.say.empty()) {
+        /* 静默门：交互反馈层（字幕）只在交互态出；脸+灯照常（上面已联动） */
+        if (display_ != nullptr && !r.say.empty() &&
+            !pet_remind::DndActive(esp_timer_get_time() / 1000)) {
             display_->ShowNotification(r.say.c_str(), 2500);
         }
         if (display_ != nullptr && r.ok) {
@@ -676,41 +757,32 @@ void PetTools::ApplyStateL1(const char* state, int calm) {
     }
 }
 
-/* 庆祝演出：孩子响应 / 状态好转（病愈、吃饱）——因果反馈链的「果」 */
+/* 庆祝演出：孩子响应 / 状态好转（病愈、吃饱）——因果反馈链的「果」。
+ * 静默门：脸+灯照常（展示层），声音/字幕只在交互态出（交互反馈层）。 */
 void PetTools::Celebrate(int ms) {
     (void)ms;
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    const bool silent = pet_remind::DndActive(now_ms);
     if (display_ != nullptr) {
         display_->SetPetFace("happy");
         face_ = "happy";
-        display_->ShowNotification("嘿嘿，谢谢照顾！", 2500);
+        if (!silent) {
+            display_->ShowNotification("嘿嘿，谢谢照顾！", 2500);
+        }
     }
     if (strip_ != nullptr) {
         const PetColorEntry* green = FindColor("green");
         if (green != nullptr) {
-            strip_->SetMoodFx(green->red, green->green, green->blue, 6, PET_MOOD_FX_BREATHE);
+            strip_->SetMoodFx(green->red, green->green, green->blue, silent ? 4 : 6,
+                              PET_MOOD_FX_BREATHE);
         }
     }
-    Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS);
+    if (!silent) {
+        Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS);
+    }
 
     /* 3.5 秒后回归当前状态的 L1（一次性定时器，不常驻） */
-    static esp_timer_handle_t restore_timer = nullptr;
-    auto restore_cb = [](void*) {
-        auto* self = s_instance_;
-        if (self != nullptr) {
-            self->ApplyStateL1(self->current_state_.c_str(),
-                               pet_remind::DndActive(esp_timer_get_time() / 1000) ? 1 : 0);
-        }
-    };
-    if (restore_timer == nullptr) {
-        esp_timer_create_args_t args = {};
-        args.callback = restore_cb;
-        args.dispatch_method = ESP_TIMER_TASK;
-        args.name = "pet_celebrate";
-        esp_timer_create(&args, &restore_timer);
-    } else {
-        esp_timer_stop(restore_timer);
-    }
-    esp_timer_start_once(restore_timer, 3500 * 1000);
+    ScheduleRestoreState(3500);
 }
 
 /* /api/map 数据源：固件与看板共用同一份映射表 */
@@ -778,10 +850,11 @@ void PetTools::WatchdogTick() {
     const char* shown = display_ != nullptr ? display_->GetPetFace() : "";
     bool face_drift;
     if (shown != nullptr && shown[0] != '\0') {
-        /* GetPetFace 返回的是规范名（ExprName），映射表也是规范名，strcmp 足够 */
-        face_drift = (strcmp(shown, entry->face) != 0);
+        /* GetPetFace 返回规范名（ExprName），映射表里可能写别名（如 starving→crying），
+         * 先经 CanonFace 归一化再比，否则 watchdog 每 60s 误判一次「脸跑偏」。 */
+        face_drift = (strcasecmp(CanonFace(shown), CanonFace(entry->face)) != 0);
     } else {
-        face_drift = (face_ != entry->face); /* 查不到真实脸时退回缓存对账 */
+        face_drift = (strcasecmp(CanonFace(face_.c_str()), CanonFace(entry->face)) != 0);
     }
     bool light_drift = (strip_ != nullptr && mood_name_ != entry->color);
     if (face_drift || light_drift) {
@@ -790,6 +863,77 @@ void PetTools::WatchdogTick() {
                  entry->color);
         ApplyStateL1(current_state_.c_str(), pet_remind::DndActive(now_ms) ? 1 : 0);
     }
+}
+
+/*
+ * 本地命令词（ASR 文本快路径）：孩子说一句短指令，设备本地 1 秒内直达，
+ * 不等云端 LLM 绕一圈。命中后设防二连窗口，LLM 随后的重复调用被短路。
+ * 没命中返回 false —— 该句原样进云对话，兜底永远在。
+ * 线程：由 df_k10_board::OnUserSpeech 经 Application::Schedule 投到主任务调用。
+ */
+bool PetTools::HandleSpokenCommand(const char* text) {
+#if PET_CMD_ENABLE
+    if (text == nullptr || text[0] == '\0') {
+        return false;
+    }
+    const std::string t = text;
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    ESP_LOGI(TAG, "PET_PATCH: spoken cmd try: %s", t.c_str());
+
+    struct Cmd {
+        const char* key1;
+        const char* key2;
+        const char* action;
+    };
+    static const Cmd kCmds[] = {
+        {"喂食", "开饭", "feed"},
+        {"吃饭", "喂我吃", "feed"},
+        {"摸摸头", "摸摸你", "pet"},
+        {"陪我玩", "玩游戏", "play"},
+        {"睡觉", "晚安", "sleep"},
+    };
+    for (const auto& c : kCmds) {
+        if (t.find(c.key1) != std::string::npos || t.find(c.key2) != std::string::npos) {
+            std::string args = "{}";
+            if (strcmp(c.action, "feed") == 0) {
+                args = "{\"food\":\"小饼干\"}";
+            }
+            cmd_guard_action_ = c.action;
+            cmd_guard_until_ms_ = now_ms + PET_CMD_GUARD_MS;
+            PetActionResult r = cloud_.Act(c.action, args);
+            if (r.from_cloud) {
+                ReactToEvents(r);
+                last_status_ms_ = 0;
+            }
+            ESP_LOGI(TAG, "PET_PATCH: local cmd '%s' -> %s ok=%d", t.c_str(), c.action,
+                     r.ok ? 1 : 0);
+            /* 字幕也走静默门；脸+灯已由 ActionHook/ReactToEvents 联动 */
+            if (display_ != nullptr && !r.say.empty() && !pet_remind::DndActive(now_ms)) {
+                display_->ShowNotification(r.say.c_str(), 2500);
+            }
+            return true;
+        }
+    }
+
+    /* 「你怎么样/你还好吗」→ 状态自述（只读，不设防二连） */
+    if (t.find("你怎么样") != std::string::npos || t.find("你还好吗") != std::string::npos ||
+        t.find("状态怎么样") != std::string::npos) {
+        PetStatus st = cloud_.GetStatus();
+        const char* state = StateFromEvents(st.events);
+        const StateMapEntry* entry = FindStateMap(state);
+        const char* say = (entry != nullptr && entry->caption[0] != '\0') ? entry->caption
+                                                                          : "感觉还不错～";
+        ESP_LOGI(TAG, "PET_PATCH: local cmd status say: %s", say);
+        if (display_ != nullptr && !pet_remind::DndActive(now_ms)) {
+            display_->ShowNotification(say, 2500);
+        }
+        return true;
+    }
+    return false;
+#else
+    (void)text;
+    return false;
+#endif
 }
 
 void PetTools::RegisterCloudTools() {
@@ -855,6 +999,20 @@ void PetTools::RegisterCloudTools() {
                 cJSON_free(text);
             }
             cJSON_Delete(args);
+
+            /* 本地命令词直达后的防二连：同一动作在 PET_CMD_GUARD_MS 内，
+             * LLM 对同一句的重复调用直接短路（孩子说「喂食」→ 本地已喂过）。 */
+            if (!cmd_guard_action_.empty() && action == cmd_guard_action_ &&
+                esp_timer_get_time() / 1000 < cmd_guard_until_ms_) {
+                cmd_guard_action_.clear();
+                ESP_LOGI(TAG, "PET_PATCH: local cmd guard hit, skip duplicate %s",
+                         action.c_str());
+                std::string dedup = "{\"ok\":true,\"code\":\"OK\",\"say\":\"";
+                dedup += (action == "feed") ? "刚刚已经吃过啦～" : "刚刚已经做过了呀～";
+                dedup += "\",\"mode\":\"local\",\"hunger\":0,\"energy\":0,\"mood\":0,"
+                         "\"sick\":false,\"coins\":0}";
+                return dedup;
+            }
 
             PetActionResult r = cloud_.Act(action, args_json);
             if (r.from_cloud) {

@@ -67,6 +67,10 @@ public:
      * 衰减导致的状态变化也换脸换灯；脸/灯跑偏了强行拉回。板级定时器调用。 */
     void WatchdogTick();
 
+    /* 本地命令词（喂食/摸摸头/陪我玩/你怎么样/睡觉）：ASR 文本快路径，
+     * 命中本地直达并设防二连窗口；没命中返回 false 走云对话。 */
+    bool HandleSpokenCommand(const char* text);
+
     /* pet_remind 钩子回调（也给看板 /api/map 用） */
     void ApplyStateL1(const char* state, int calm);
     void Celebrate(int ms);
@@ -78,6 +82,10 @@ private:
     int level_ = 5;
     std::string mood_name_ = "off";
     std::string face_ = "neutral";
+
+    /* 本地命令词防二连：直达后 PET_CMD_GUARD_MS 内同名 action 不重复执行 */
+    std::string cmd_guard_action_;
+    int64_t cmd_guard_until_ms_ = 0;
     std::vector<std::string> faces_;  // 首次用到时才向资源表探测
 
     // 拍一拍 / 晃动检测用的历史状态

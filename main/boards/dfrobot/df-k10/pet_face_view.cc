@@ -12,6 +12,7 @@
 #include "pet_emotion.h"
 #include "pet_face.h"
 #include "pet_remind.h"
+#include "pet_engage.h"
 #if PET_MOTION_ENABLE
 #include "pet_motion.h"
 #endif
@@ -1129,6 +1130,14 @@ void PetFaceView::Tick() {
         for (int i = 0; i < n; i++) {
             /* 体感 = 孩子动手了 → 提醒链记「响应」/解除静置闸（SECTION 07） */
             pet_remind::OnMotion(static_cast<int>(evs[i]), esp_timer_get_time() / 1000);
+            /* 静默门（AttentionGate）：体感动作=有人在 → 交互窗续期；
+             * 静止 20s=没人理 → 提前收窗回静默。PICKUP/唤醒算 strong（见面礼）。 */
+            if (evs[i] == PET_MOTION_STILL) {
+                pet_engage::NoteStill(esp_timer_get_time() / 1000);
+            } else {
+                pet_engage::NoteActivity(evs[i] == PET_MOTION_PICKUP ? 1 : 0,
+                                         esp_timer_get_time() / 1000);
+            }
             switch (evs[i]) {
                 case PET_MOTION_FALL:
                     PetEmotion().Fire(PET_MOOD_SCARED,
@@ -1194,6 +1203,9 @@ void PetFaceView::Tick() {
 
     PetEmotion().Tick(kTickMs);
     OnMoodChanged();
+
+    /* 静默门进/出门钩子（LVGL 线程统一演 UI，音频线程只报信） */
+    pet_engage::Flush(esp_timer_get_time() / 1000);
 
     /* ---------- 呼吸：眼嘴组 ±1px 浮动 + 腮红透明度正弦 ---------- */
     breath_phase_ += (2.0f * 3.1415926f * kTickMs) / (s.breath_s * 1000.0f);
