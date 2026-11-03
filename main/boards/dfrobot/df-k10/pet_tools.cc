@@ -608,10 +608,16 @@ void PetTools::RegisterSensorTools() {
         "读取宠物的完整状态：饿不饿、有没有力气、心情好不好、有没有生病、有多少游戏币、几级，"
         "以及屏幕表情和灯色。凡是孩子问关于【宠物自己】的问题都必须调用它，包括："
         "『你饿不饿』『是不是饿了』『饿了吗』『你几级了』『你有多少钱』『你哪里不舒服』"
-        "『是不是病了』『你怎么样』『你开心吗』。"
+        "『是不是病了』『你怎么样』『你开心吗』『你头晕吗』『你难受吗』。"
         "回答时以宠物第一人称把返回的数值说给孩子（例：饱食度只剩 30 → 『我有点饿啦』），"
         "绝对不要答非所问、也不要以助手身份说『我是 AI 不会饿』。"
-        "返回里的 say 是宠物此刻的心声，可以顺着它的话聊。",
+        "返回里的 say 是宠物此刻的心声，可以顺着它的话聊。"
+        "★ 状态一致性铁律（最重要）：sick=true 时 symptoms 字段列出了宠物的具体症状"
+        "（如『头晕、身上没力气、想睡觉』）。孩子追问任何具体症状（头晕/难受/不舒服/没精神/"
+        "哪里疼）或问『你病了吗』，都必须与 self-check（你怎么样/本工具）口径完全一致："
+        "sick=true 就老老实实承认『是的，我头晕/难受』；sick=false 就明确说『没有呀，我好好的』。"
+        "绝不允许出现『自检说生病、被问症状却否认』这种自相矛盾——两者永远以本工具返回的 "
+        "sick 和 symptoms 为唯一真相来源。",
         PropertyList(),
         [this](const PropertyList&) -> ToolResult {
             /* 30 秒内问过就不再打云端：一句话里模型可能连着问好几次状态，
@@ -655,12 +661,13 @@ void PetTools::RegisterSensorTools() {
 // 而是由云端按真实时间推演出来的状态，设备只负责呈现。
 
 std::string PetTools::StatusJson(const PetStatus& st, const char* mode) {
-    char buf[640];
+    char buf[768];
     snprintf(buf, sizeof(buf),
-             "{\"hunger\":%d,\"energy\":%d,\"mood\":%d,\"sick\":%s,\"coins\":%d,\"level\":%d,"
-             "\"exp\":%d,\"face\":\"%s\",\"light\":\"%s\",\"mode\":\"%s\",\"say\":\"%s\","
-             "\"motion\":\"%s\"}",
-             st.hunger, st.energy, st.mood, st.sick ? "true" : "false", st.coins, st.level, st.exp,
+             "{\"hunger\":%d,\"energy\":%d,\"mood\":%d,\"sick\":%s,\"symptoms\":\"%s\","
+             "\"coins\":%d,\"level\":%d,\"exp\":%d,\"face\":\"%s\",\"light\":\"%s\","
+             "\"mode\":\"%s\",\"say\":\"%s\",\"motion\":\"%s\"}",
+             st.hunger, st.energy, st.mood, st.sick ? "true" : "false", st.symptoms.c_str(),
+             st.coins, st.level, st.exp,
              face_.c_str(), mood_name_.c_str(), mode, st.mood_word.c_str(),
              PetMotionLastEventName());
     return std::string(buf);
@@ -915,17 +922,54 @@ bool PetTools::HandleSpokenCommand(const char* text) {
         }
     }
 
-    /* 「你怎么样/你还好吗」→ 状态自述（只读，不设防二连） */
-    if (t.find("你怎么样") != std::string::npos || t.find("你还好吗") != std::string::npos ||
-        t.find("状态怎么样") != std::string::npos) {
+    /* 统一状态/症状回答（只读，不设防二连）。
+     * 修复「自检确认生病、被问具体症状却否认」的自相矛盾：所有【宠物自己身体/心情】的
+     * 问题都从这里走 grounded 答案，不再交给 LLM 自由发挥。sick=true 时严格按 symptoms
+     * 承认症状；sick=false 时明确说「好好的」，两面永远一致。 */
+    bool isStatusQ = (t.find("你怎么样") != std::string::npos ||
+                      t.find("你还好吗") != std::string::npos ||
+                      t.find("状态怎么样") != std::string::npos);
+    bool isSymptomQ = (t.find("头晕") != std::string::npos ||
+                       t.find("难受") != std::string::npos ||
+                       t.find("不舒服") != std::string::npos ||
+                       t.find("病了") != std::string::npos ||
+                       t.find("生病") != std::string::npos ||
+                       t.find("哪里不舒服") != std::string::npos ||
+                       t.find("哪里疼") != std::string::npos ||
+                       t.find("怎么了") != std::string::npos ||
+                       t.find("没事吧") != std::string::npos ||
+                       t.find("健康") != std::string::npos ||
+                       t.find("没劲") != std::string::npos);
+    if (isStatusQ || isSymptomQ) {
         PetStatus st = cloud_.GetStatus();
         const char* state = StateFromEvents(st.events);
         const StateMapEntry* entry = FindStateMap(state);
-        const char* say = (entry != nullptr && entry->caption[0] != '\0') ? entry->caption
-                                                                          : "感觉还不错～";
-        ESP_LOGI(TAG, "PET_PATCH: local cmd status say: %s", say);
+        std::string say;
+        if (st.sick) {
+            say = (entry != nullptr && entry->caption[0] != '\0')
+                      ? std::string(entry->caption)
+                      : "我有点难受……";
+            if (isSymptomQ && !st.symptoms.empty()) {
+                say = "嗯……" + st.symptoms + "，我确实不太舒服，想让主人给我看看医生。";
+            }
+        } else {
+            if (isSymptomQ) {
+                say = "没有呀，我好好的，一点都不难受～";
+            } else {
+                say = (entry != nullptr && entry->caption[0] != '\0')
+                          ? std::string(entry->caption)
+                          : "感觉还不错～";
+            }
+        }
+        ESP_LOGI(TAG, "PET_PATCH: local cmd status/symptom say: %s (sick=%d)", say.c_str(),
+                 st.sick ? 1 : 0);
         if (display_ != nullptr && !pet_remind::DndActive(now_ms)) {
-            display_->ShowNotification(say, 2500);
+            display_->ShowNotification(say.c_str(), 2500);
+        }
+        /* 表情反馈：回答时把状态脸亮出来（生病→sick 脸、饿了→hungry 脸…），
+         * 而不是停在 neutral——这是「缺表情反馈」的直接补偿。 */
+        if (display_ != nullptr && entry != nullptr && FaceExists(entry->face)) {
+            display_->SetPetStateFace(entry->face);
         }
         return true;
     }

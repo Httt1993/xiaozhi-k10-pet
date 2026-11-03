@@ -252,12 +252,20 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 /* PIN 改存 sessionStorage：关掉标签页就要重新输，避免「电脑端不用输 PIN」的观感（B-01） */
 let PIN=sessionStorage.getItem('pet_pin')||'';
 let seq=parseInt(localStorage.getItem('pet_seq')||'1');
-let pollBusy=false, failCount=0;
+let pollBusy=false, failCount=0, pollDelay=3000;
 const $=id=>document.getElementById(id);
+/* 自调度轮询：连续失败时指数退避（3s→6s→12s→…→30s），成功一次立刻回到 3s。
+   这样既不误报「连接失败」（瞬时抖动只退避不告警），也不在设备挣扎时雪崩式重试。 */
+function schedulePoll(){setTimeout(async()=>{await poll();schedulePoll();},pollDelay);}
+/* 轻量 toast：不依赖预置 HTML/CSS，动态创建，2.4s 后自动消失。用于「已自动重连」等一次性提示。 */
+function toast(msg){const t=document.createElement('div');t.textContent=msg;
+t.style.cssText='position:fixed;left:50%;top:16px;transform:translateX(-50%);background:rgba(50,50,50,.92);color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;z-index:9999;opacity:0;transition:opacity .3s;max-width:80%';
+document.body.appendChild(t);requestAnimationFrame(()=>t.style.opacity='1');
+setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},2400);}
 function showLogin(msg){$('pin-overlay').style.display='flex';$('main').style.display='none';
 if(msg)$('pin-err').textContent=msg}
 function showMain(){$('pin-overlay').style.display='none';$('main').style.display='block';
-if(!window.__pollTimer){poll();window.__pollTimer=setInterval(poll,3000)}}
+if(!window.__pollOn){window.__pollOn=true;poll();schedulePoll();}}
 async function doLogin(){const v=$('pin-input').value.trim();
 if(!v){showLogin('请输入 PIN');return}
 try{
@@ -274,7 +282,8 @@ showLogin('PIN 已失效，请重新输入');throw new Error('NO_PIN')}
 return r.json()}
 async function poll(){if(pollBusy)return;pollBusy=true;try{
 const d=await api('/api/state');
-failCount=0;$('status-bar').textContent='k10-pet.local:8080 · 连接正常';
+if(failCount>0)toast('已自动重连，连接恢复');
+failCount=0;pollDelay=3000;$('status-bar').textContent='k10-pet.local:8080 · 连接正常';
 if(!d.status){pollBusy=false;return}
 const s=d.status;
 $('v-hunger').textContent=s.hunger;$('b-hunger').style.width=Math.min(100,s.hunger)+'%';
@@ -285,8 +294,11 @@ $('face').textContent=s.sick?'🤒':s.hunger<=15?'🥺':s.mood<=20?'😢':s.mood
 $('say').textContent=d.say||'…';
 renderTasks(d.tasks||[]);
 }catch(e){failCount++;
-/* 连续失败才提示，成功一次就恢复 —— 修「一直显示连接失败重试中」（A-08） */
-if(failCount>=2)$('status-bar').textContent='⚠️ 连接失败，重试中…（'+failCount+' 次）'}
+/* 连续失败才退避+提示，成功一次立刻恢复 —— 修「一直显示连接失败重试中」（A-08）。
+   退避而不是硬撞：设备若短暂卡顿，退避能让它缓过来，否则越重试越堵。 */
+if(failCount===1){pollDelay=6000}
+else if(failCount>1){pollDelay=Math.min(pollDelay*2,30000)}
+if(failCount>=2)$('status-bar').textContent='⚠️ 连接失败，自动重连中…（'+failCount+' 次）'}
 finally{pollBusy=false}}
 let lastTasks=[];
 function renderTasks(tasks){const el=$('task-list');lastTasks=tasks;
@@ -462,9 +474,11 @@ void HandleState(int fd, const std::string& headers) {
                                 pet_engage::Engaged(now_ms) ? "engaged" : "silent");
     }
 
-    /* 任务清单 */
+    /* 任务清单：只读缓存，绝不触发云端往返（A-08 看板断连根因修复，
+       原来用 GetTasksJson 会让每次 /api/state 轮询都打一次最长 7s 的 HTTPS，
+       把 4 个客户端槽位占满 → 503/超时 → 持续「连接失败」） */
     {
-        std::string tasks_json = g_cloud->GetTasksJson(true);
+        std::string tasks_json = g_cloud->GetTasksJsonCached(true);
         cJSON* tasks = cJSON_Parse(tasks_json.c_str());
         if (tasks && cJSON_IsArray(tasks)) {
             cJSON_AddItemToObject(root, "tasks", tasks);

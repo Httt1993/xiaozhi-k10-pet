@@ -480,14 +480,21 @@ void PetCloud::RefreshStatusFromState() {
 
         if (status_.sick) {
             status_.mood_word = "我有点难受……头昏昏的，能不能给我看看医生呀？";
-        } else if (status_.hunger <= 15) {
-            status_.mood_word = "我肚子饿得咕咕叫了，快给我点吃的吧～";
-        } else if (status_.mood <= 20) {
-            status_.mood_word = "有点无聊呢，陪我玩一会儿好不好？";
-        } else if (status_.mood >= 80 && status_.energy >= 70) {
-            status_.mood_word = "我今天状态超好！";
+            /* 统一症状描述：自检（get_status/你怎么样）与「你头晕吗」这类具体症状追问
+             * 必须口径一致。这里把生病态固化为同一组症状，下游（本地命令 / LLM 工具）
+             * 都引用它，不再各说各话。 */
+            status_.symptoms = "头晕、身上没力气、想睡觉";
         } else {
-            status_.mood_word = "感觉还不错～";
+            status_.symptoms.clear();
+            if (status_.hunger <= 15) {
+                status_.mood_word = "我肚子饿得咕咕叫了，快给我点吃的吧～";
+            } else if (status_.mood <= 20) {
+                status_.mood_word = "有点无聊呢，陪我玩一会儿好不好？";
+            } else if (status_.mood >= 80 && status_.energy >= 70) {
+                status_.mood_word = "我今天状态超好！";
+            } else {
+                status_.mood_word = "感觉还不错～";
+            }
         }
 
         status_.events.clear();
@@ -992,4 +999,39 @@ int PetCloud::CountOpenTasks() {
     }
     cJSON_Delete(root);
     return n;
+}
+
+/* 只读任务缓存：直接解析内存 state，不触发云端。看板轮询专用（见 pet_cloud.h 注释）。 */
+std::string PetCloud::GetTasksJsonCached(bool include_done) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_json_.empty()) {
+        return "[]";
+    }
+    cJSON* root = cJSON_Parse(state_json_.c_str());
+    if (root == nullptr) {
+        return "[]";
+    }
+    cJSON* tasks = cJSON_GetObjectItem(root, "tasks");
+    cJSON* result = cJSON_CreateArray();
+    if (cJSON_IsArray(tasks)) {
+        cJSON* it = nullptr;
+        cJSON_ArrayForEach(it, tasks) {
+            const char* status = GetStr(it, "status", "");
+            if (!include_done && strcmp(status, "done") == 0) {
+                continue;
+            }
+            cJSON* item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "id", GetStr(it, "id", ""));
+            cJSON_AddStringToObject(item, "title", GetStr(it, "title", ""));
+            cJSON_AddNumberToObject(item, "reward", GetInt(it, "reward", 0));
+            cJSON_AddStringToObject(item, "status", status);
+            cJSON_AddItemToArray(result, item);
+        }
+    }
+    char* text = cJSON_PrintUnformatted(result);
+    std::string out = text ? text : "[]";
+    if (text) cJSON_free(text);
+    cJSON_Delete(result);
+    cJSON_Delete(root);
+    return out;
 }

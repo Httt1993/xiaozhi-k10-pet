@@ -41,6 +41,9 @@ struct PetStatus {
     int level = 1;
     bool sick = false;
     std::string mood_word;                /* 宠物此刻的心声 */
+    std::string symptoms;                 /* 生病时的具体症状（逗号分隔），如「头晕、没力气、想睡觉」；
+                                             非生病态为空。统一状态机专用：LLM/本地命令回答症状问题时
+                                             必须以它为准，避免「问症状否认、自检却确认」的自相矛盾 */
     std::vector<std::string> events;      /* sick / starving / hungry / tired / sad / bored / great */
 };
 
@@ -93,6 +96,14 @@ public:
 
     /** 任务清单的 JSON 数组字符串（家长看板用），如 [{"id":"t1","title":"写作业","reward":10,"status":"pending"},...] */
     std::string GetTasksJson(bool include_done = false);
+
+    /**
+     * 只读任务缓存：直接解析内存里的 state_json_，绝不触发 Act / 云端往返。
+     * 看板每 3 秒轮询 /api/state，若用 GetTasksJson 会让每次刷新都打一次云端
+     * （最长 7s HTTPS 握手），把 4 个客户端槽位占满 → 503/超时 → 持续「连接失败」。
+     * 任务只在指令（Act）或心跳 sync 时更新，这里读缓存足够新鲜，且不再拖垮设备。
+     */
+    std::string GetTasksJsonCached(bool include_done = false);
 
     /** 未完成任务数（pending+submitted），设备屏角标用；只读本地 state，不发网络请求 */
     int CountOpenTasks();
