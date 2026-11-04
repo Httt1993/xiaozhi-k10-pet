@@ -79,11 +79,19 @@ private:
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
 
+    /* PET_PATCH: io_expander==nullptr = TCA9555 未初始化（new 失败）。
+     * 所有 io_expander 操作走空指针安全路径：不刷错、不拖 WDT。 */
     esp_err_t IoExpanderSetLevel(uint16_t pin_mask, uint8_t level) {
+        if (io_expander == nullptr) {
+            return ESP_OK;   /* 无扩展器：静默跳过 */
+        }
         return esp_io_expander_set_level(io_expander, pin_mask, level);
     }
 
     uint8_t IoExpanderGetLevel(uint16_t pin_mask) {
+        if (io_expander == nullptr) {
+            return 1;        /* 无扩展器：低有效按键返回高=未按下，避免误触 */
+        }
         uint32_t pin_val = 0;
         esp_io_expander_get_level(io_expander, DRV_IO_EXP_INPUT_MASK, &pin_val);
         pin_mask &= DRV_IO_EXP_INPUT_MASK;
@@ -91,10 +99,25 @@ private:
     }
 
     void InitializeIoExpander() {
-        esp_io_expander_new_i2c_tca95xx_16bit(
-                i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9555_ADDRESS_000, &io_expander);
+        /* PET_PATCH: 检查 new 返回值 + 上电时序重试。
+         * InitializeI2c() 后 TCA9555 可能还没上电稳（reset NACK→new 失败），重试 3 次；
+         * 仍失败则 io_expander=nullptr，按键/背光/相机复位走空指针安全路径。 */
+        esp_err_t ret = ESP_FAIL;
+        for (int i = 0; i < 3 && ret != ESP_OK; i++) {
+            if (i > 0) {
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+            }
+            io_expander = nullptr;
+            ret = esp_io_expander_new_i2c_tca95xx_16bit(
+                    i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9555_ADDRESS_000, &io_expander);
+        }
+        if (ret != ESP_OK || io_expander == nullptr) {
+            io_expander = nullptr;
+            ESP_LOGE(TAG, "PET_PATCH: TCA9555 init failed (%s), button/backlight/camera-reset disabled",
+                     esp_err_to_name(ret));
+            return;
+        }
 
-        esp_err_t ret;
         ret = esp_io_expander_print_state(io_expander);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Print state failed: %s", esp_err_to_name(ret));
