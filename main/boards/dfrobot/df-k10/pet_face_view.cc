@@ -39,7 +39,7 @@ constexpr int kHl2D = 9;
 
 constexpr int kMouthCenterX = 120;
 
-/* 底图鼻子下沿 y≈199，任何嘴都不能高于 200，否则盖住鼻子 */
+/* 底图鼻子下沿 y≈195（粉兔小鼻 16x11 @ 120,189.5），任何嘴都不能高于 196，否则盖住鼻子 */
 constexpr int kNoseBottom = 200;
 
 /* 腮红叠层（底图自带腮红中心 53.5/185.5, y 191.5，实测 30x16） */
@@ -47,10 +47,10 @@ constexpr int kBlushCxL = 53;
 constexpr int kBlushCxR = 186;
 constexpr int kBlushCy = 192;
 
-static const lv_color_t kInk = lv_color_hex(0x1A1210);
+static const lv_color_t kInk = lv_color_hex(0x4A2C32);   /* 兔脸深梅五官 */
 static const lv_color_t kWhite = lv_color_hex(0xFFFFFF);
 static const lv_color_t kTongue = lv_color_hex(0xE8748C);
-static const lv_color_t kBlushPink = lv_color_hex(0xFF8FAB);
+static const lv_color_t kBlushPink = lv_color_hex(0xE87E9C);  /* 兔粉腮红 */
 
 /* 每个表情一套参数。
  * eye_h=0 表示不用实心椭圆眼；arc_w>0 用弧线眼；spiral>0 用螺旋眼。 */
@@ -240,7 +240,7 @@ void PetFaceView::Build(lv_obj_t* parent) {
         lv_obj_set_size(bar, 232, 40);
         lv_obj_set_pos(bar, 4, 276);
         lv_obj_set_style_bg_opa(bar, LV_OPA_80, 0);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(0x2A1E18), 0);
+        lv_obj_set_style_bg_color(bar, lv_color_hex(0x8A4560), 0);
         lv_obj_set_style_radius(bar, 12, 0);
         lv_obj_clear_flag(bar, static_cast<lv_obj_flag_t>(
                                    LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
@@ -265,8 +265,8 @@ void PetFaceView::Build(lv_obj_t* parent) {
         const lv_color_t kGreen = lv_color_hex(0x81C784);
         const lv_color_t kGold = lv_color_hex(0xFFD54F);
         const lv_color_t kTear = lv_color_hex(0x378ADD);
-        const lv_color_t kDark = lv_color_hex(0x3A2010);   /* 鱼眼 */
-        const lv_color_t kBarBg = lv_color_hex(0x2A1E18);  /* 咬痕/心口镂空用底色 */
+        const lv_color_t kDark = lv_color_hex(0x4A2C32);   /* 鱼眼 */
+        const lv_color_t kBarBg = lv_color_hex(0x8A4560);  /* 咬痕/心口镂空用底色 */
         const lv_color_t kCrack = lv_color_hex(0x8B3A4A);  /* 裂心纹 */
         const lv_color_t kCoral = lv_color_hex(0xE85B4B);  /* 角标气泡 */
 

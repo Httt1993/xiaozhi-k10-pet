@@ -6,12 +6,12 @@
 
 namespace {
 
-const lv_color_t kPink = lv_color_hex(0xFF8FAB);
+const lv_color_t kPink = lv_color_hex(0xE87E9C);
 const lv_color_t kPinkDeep = lv_color_hex(0xFF5C7A);
 const lv_color_t kButter = lv_color_hex(0xFFD97D);
 const lv_color_t kLilac = lv_color_hex(0xB8A9E8);
 const lv_color_t kSky = lv_color_hex(0x6EC1E4);
-const lv_color_t kInk = lv_color_hex(0x1A1210);
+const lv_color_t kInk = lv_color_hex(0x4A2C32);
 const lv_color_t kTearBlue = lv_color_hex(0x7FB8E8);
 
 lv_obj_t* MakeCircle(lv_obj_t* parent, int r, lv_color_t c) {
