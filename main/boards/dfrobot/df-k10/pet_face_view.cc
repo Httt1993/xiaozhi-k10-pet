@@ -65,7 +65,7 @@ struct ExprStyle {
     int mouth_w;
     int mouth_thick;
     int mouth_bottom;
-    int brow_mode;     /* 0=无 1=怒眉(下压斜线) 2=垂眉 3=困眉(平) */
+    int brow_mode;     /* 0=无 1=怒眉(下压斜线) 2=垂眉(八字) 3=困眉(平) 4=挑眉(好奇,右高左平) 5=平眉(柔和) 6=扬眉(外端微扬+抬高) */
     int spiral;        /* 0=无 1=螺旋晕眩眼 */
     float base_open;   /* 基础开度：困=0.35，惊吓=1.15 */
     int blush_pct;     /* 腮红加深：100=常态，125=开心/生气 */
@@ -73,31 +73,32 @@ struct ExprStyle {
 };
 
 /*
- * neutral 大圆眼 + ω 嘴
- * happy   ∩ 笑眼 + 宽 ∪ 笑嘴 + 腮红加深
- * sad     眼略小下移 + ∩ 哭嘴 + 垂眉
- * sick    ∪ 闭眼弧 + 小圆嘴
- * hungry  眼睛更大 + 张大嘴（带舌头）
- * angry   怒眉 + 眼变窄 0.75× + 平直嘴 + 腮红加深
- * scared  瞪圆眼 1.15× + 小圆嘴（张成 o）
- * dizzy   螺旋眼 + 波浪嘴
- * curious 眼略大 + 小 ω
- * sleepy  眼半闭（base_open 0.35）+ 小 ω + 困眉 + 呼吸变慢
+ * v2 表情深化（颜色锁定兔粉/深梅，只动形态）：
+ * neutral 大圆眼 + 微宽 ω 嘴
+ * happy   更宽更圆的 ∩ 笑眼（46/10）+ 宽 ∪ 笑嘴 + 腮红最深
+ * sad     眼略小下垂 + ∩ 哭嘴加深加宽 + 垂眉 + 【周期滚泪】
+ * sick    ∪ 闭眼弧 + 更小圆嘴 + 【周期冒汗】
+ * hungry  眼睛更大 + 张大嘴（舌头加宽变圆 42%/55%）
+ * angry   怒眉加压（±15°）+ 眼更窄 40h + 平嘴加粗 + 【偶发💢】
+ * scared  瞪圆眼 60×70 + 高光放大 135% + 小圆嘴 + 【冒汗+眼微颤】
+ * dizzy   螺旋眼（内环加大+反向缓转）+ 波浪嘴
+ * curious 眼略大 + 挑眉（右高左平）+ 小 ω
+ * sleepy  眼半闭（base_open 0.35）+ 小 ω + 困眉 + 呼吸变慢 + zZz（原有）
  *
  * 注意：eye_w/eye_h 就是最终尺寸，base_open 只表达「半闭眼」这类连续开度，
  * 不要两边都改 —— 否则会被缩放两次。
  */
 const ExprStyle kStyles[PetFaceView::kExprCount] = {
     /*        eye_w eye_h eye_y | arc_w thk top down | hl | mode m_w m_thk m_bot | brow spiral open blush breath */
-    /* neutral */ {50, 58, 117, 0, 0, 0, 0, 100, 0, 0, 0, 214, 0, 0, 1.00f, 100, 4.0f},
-    /* happy   */ {0, 0, 117, 40, 9, 132, 0, 0, 1, 40, 6, 214, 0, 0, 1.00f, 125, 3.0f},
-    /* sad     */ {46, 50, 122, 0, 0, 0, 0, 70, 1, 40, 5, 222, 2, 0, 1.00f, 100, 5.0f},
-    /* sick    */ {0, 0, 117, 44, 8, 118, 1, 0, 2, 22, 3, 224, 3, 0, 1.00f, 90, 6.0f},
-    /* hungry  */ {56, 64, 112, 0, 0, 0, 0, 110, 3, 36, 0, 227, 0, 0, 1.00f, 110, 3.5f},
-    /* angry   */ {50, 44, 122, 0, 0, 0, 0, 85, 4, 34, 5, 214, 1, 0, 1.00f, 130, 2.5f},
-    /* scared  */ {58, 67, 110, 0, 0, 0, 0, 120, 2, 18, 3, 220, 0, 0, 1.00f, 115, 3.0f},
-    /* dizzy   */ {0, 0, 117, 0, 0, 0, 0, 0, 5, 36, 4, 214, 0, 1, 1.00f, 105, 3.5f},
-    /* curious */ {54, 62, 114, 0, 0, 0, 0, 115, 0, 22, 0, 210, 0, 0, 1.00f, 110, 3.5f},
+    /* neutral */ {50, 58, 117, 0, 0, 0, 0, 100, 0, 26, 0, 214, 5, 0, 1.00f, 100, 4.0f},
+    /* happy   */ {0, 0, 117, 46, 10, 128, 0, 0, 1, 44, 7, 215, 6, 0, 1.00f, 130, 3.0f},
+    /* sad     */ {46, 54, 120, 0, 0, 0, 0, 90, 1, 32, 5, 220, 2, 0, 1.00f, 100, 5.0f},
+    /* sick    */ {0, 0, 117, 44, 8, 118, 1, 0, 2, 20, 3, 224, 2, 0, 1.00f, 90, 6.0f},
+    /* hungry  */ {56, 64, 112, 0, 0, 0, 0, 110, 3, 38, 0, 227, 6, 0, 1.00f, 110, 3.5f},
+    /* angry   */ {50, 40, 122, 0, 0, 0, 0, 85, 4, 34, 6, 214, 1, 0, 1.00f, 130, 2.5f},
+    /* scared  */ {60, 70, 108, 0, 0, 0, 0, 135, 2, 16, 3, 220, 6, 0, 1.00f, 115, 3.0f},
+    /* dizzy   */ {0, 0, 117, 0, 0, 0, 0, 0, 5, 36, 4, 214, 5, 1, 1.00f, 105, 3.5f},
+    /* curious */ {56, 64, 114, 0, 0, 0, 0, 115, 0, 24, 0, 210, 4, 0, 1.00f, 110, 3.5f},
     /* sleepy  */ {50, 58, 117, 0, 0, 0, 0, 0, 0, 16, 0, 212, 3, 0, 0.35f, 100, 6.0f},
 };
 
@@ -579,13 +580,17 @@ void PetFaceView::PlaceEyes() {
     for (int i = 0; i < 2; i++) {
         const int cx = (i == 0) ? kEyeCxL : kEyeCxR;
         if (s.spiral) {
-            /* 螺旋晕眩眼：两道同心圆环 */
+            /* 螺旋晕眩眼：两道同心圆环（轴心设好，Tick 里反向缓转） */
             Show(eye_[i], false);
             Show(eye_arc_[i], false);
             MakeArc(spiral_outer_[i], 30, 30, 3, LV_BORDER_SIDE_FULL, kInk);
             lv_obj_set_pos(spiral_outer_[i], cx - 15, eye_y_ + 29 - 15);
-            MakeArc(spiral_inner_[i], 12, 12, 2, LV_BORDER_SIDE_FULL, kInk);
-            lv_obj_set_pos(spiral_inner_[i], cx - 6, eye_y_ + 29 - 6);
+            lv_obj_set_style_transform_pivot_x(spiral_outer_[i], 15, 0);
+            lv_obj_set_style_transform_pivot_y(spiral_outer_[i], 15, 0);
+            MakeArc(spiral_inner_[i], 14, 14, 2, LV_BORDER_SIDE_FULL, kInk);
+            lv_obj_set_pos(spiral_inner_[i], cx - 7, eye_y_ + 29 - 7);
+            lv_obj_set_style_transform_pivot_x(spiral_inner_[i], 7, 0);
+            lv_obj_set_style_transform_pivot_y(spiral_inner_[i], 7, 0);
             Show(spiral_outer_[i], true);
             Show(spiral_inner_[i], true);
         } else {
@@ -625,7 +630,7 @@ void PetFaceView::PlaceMouth() {
     switch (s.mouth_mode) {
         case 0: {  /* ω：两个 ∪ 环并排，重叠 2px 让接缝融掉 */
             const int ring_w = s.mouth_w > 0 ? s.mouth_w : 24;
-            const int ring_h = 26;
+            const int ring_h = ring_w + 2;   /* 环高随宽度走，小 ω 不瘦高 */
             for (int i = 0; i < 2; i++) {
                 MakeArc(mouth_omega_[i], ring_w, ring_h, 5,
                         LV_BORDER_SIDE_BOTTOM, kInk);
@@ -659,8 +664,8 @@ void PetFaceView::PlaceMouth() {
             lv_obj_set_size(mouth_open_, w, h);
             lv_obj_set_pos(mouth_open_, kMouthCenterX - w / 2, s.mouth_bottom - h);
             Show(mouth_open_, true);
-            const int tw = w * 35 / 100;
-            const int th = tw / 2;
+            const int tw = w * 42 / 100;   /* 舌头加宽变圆（深化） */
+            const int th = tw * 55 / 100;
             lv_obj_set_size(tongue_, tw, th);
             lv_obj_set_pos(tongue_, kMouthCenterX - tw / 2, s.mouth_bottom - th - 3);
             Show(tongue_, true);
@@ -735,17 +740,33 @@ void PetFaceView::Apply() {
             const int cx = (i == 0) ? kEyeCxL : kEyeCxR;
             lv_obj_set_size(brow_[i], 34, 5);
             lv_obj_set_style_radius(brow_[i], 3, 0);
-            /* 怒眉内端下压（向中心倾斜），垂眉内端上抬，困眉放平 */
+            /* 怒眉内端下压（向中心倾斜），垂眉内端上抬，困眉/平眉放平，
+             * 挑眉（好奇）：左眉低位放平、右眉整体上挑外角上扬，
+             * 扬眉（喜/馋/惊）：整体抬高 + 外端微扬，眉飞色舞 */
             int angle = 0;
+            int brow_y = eye_y_ - 12;
             if (s.brow_mode == 1) {
-                angle = (i == 0) ? 120 : -120;   /* ±12° */
+                angle = (i == 0) ? 150 : -150;   /* ±15° 怒眉加压 */
+                brow_y = eye_y_ - 14;
             } else if (s.brow_mode == 2) {
-                angle = (i == 0) ? -100 : 100;
+                angle = (i == 0) ? -120 : 120;   /* 垂眉内端抬起 ±12°，更「愁」 */
+                brow_y = eye_y_ - 9;             /* 贴紧眼睛，更无辜 */
+            } else if (s.brow_mode == 4) {
+                if (i == 0) {
+                    angle = 0;
+                    brow_y = eye_y_ - 10;        /* 左眉放平略低 */
+                } else {
+                    angle = -60;                 /* 右眉外角上扬 */
+                    brow_y = eye_y_ - 22;        /* 右眉整体上挑 */
+                }
+            } else if (s.brow_mode == 6) {
+                angle = (i == 0) ? 35 : -35;     /* 外端微扬 ±3.5° */
+                brow_y = eye_y_ - 17;            /* 整体抬高，眉飞色舞 */
             }
+            /* brow_mode 3/5：angle=0 平眉，brow_y 默认 */
             lv_obj_set_style_transform_rotation(brow_[i], angle, 0);
             lv_obj_set_style_transform_pivot_x(brow_[i], 17, 0);
             lv_obj_set_style_transform_pivot_y(brow_[i], 2, 0);
-            const int brow_y = (s.brow_mode == 1) ? (eye_y_ - 14) : (eye_y_ - 12);
             lv_obj_set_pos(brow_[i], cx - 17, brow_y);
             Show(brow_[i], true);
         }
@@ -775,18 +796,45 @@ void PetFaceView::SetExpression(Expr e) {
     ApplyExpr(e);
 }
 
-void PetFaceView::ApplyExpr(Expr e) {
-    if (e < 0 || e >= kExprCount) {
-        e = kNeutral;
-    }
-    if (e == expr_) {
-        return;
-    }
-    expr_ = e;
+void PetFaceView::SwapToTarget() {
+    expr_ = trans_target_;
     blinking_ = false;
     open_ratio_ = 1.0f;
     blink_wait_ms_ = 2000 + static_cast<int32_t>(esp_random() % 3000);
     Apply();
+}
+
+/*
+ * v3 过渡引擎：表情不再瞬间跳变，走「人类换表情」的节奏 ——
+ *   默认   : 眨眼式换脸（90ms 闭 → 换 → 130ms 睁）
+ *   →难过  : 先「愣住」瞪大 150ms（怔住）→ 慢闭 120ms → 慢睁 260ms（委屈缓释）
+ *   →困了  : 慢闭 220ms → 换 → 慢睁（睡意沉下来）
+ *   →生气  : 快眨 60ms（怒目瞬间成形）
+ *   →惊吓  : 无过渡，瞬间瞪大（惊就该是即时的）
+ */
+void PetFaceView::ApplyExpr(Expr e) {
+    if (e < 0 || e >= kExprCount) {
+        e = kNeutral;
+    }
+    if (e == expr_ || (trans_phase_ != 0 && e == trans_target_)) {
+        return;
+    }
+    trans_target_ = e;
+    if (e == kScared) {
+        SwapToTarget();
+    } else if (e == kSad) {
+        trans_phase_ = 1;
+        trans_ms_ = 270;
+    } else if (e == kSleepy) {
+        trans_phase_ = 1;
+        trans_ms_ = 220;
+    } else if (e == kAngry) {
+        trans_phase_ = 1;
+        trans_ms_ = 60;
+    } else {
+        trans_phase_ = 1;
+        trans_ms_ = 90;
+    }
 
     /* 换表情时顺手放个小 FX，像真的「反应过来」 */
     switch (e) {
@@ -810,7 +858,7 @@ void PetFaceView::ApplyExpr(Expr e) {
             SpawnFx(PET_FX_QUESTION, 186, 96);
             break;
         case kSad:
-            SpawnFx(PET_FX_TEAR, kEyeCxL + 24, 170);
+            SpawnFx(PET_FX_TEAR, 56, 176);   /* 左眼外眼角滚落（顺脸颊） */
             break;
         default:
             break;
@@ -1143,6 +1191,9 @@ void PetFaceView::Tick() {
                     PetEmotion().Fire(PET_MOOD_SCARED,
                         PetEmotionFsm::DefaultPriority(PET_MOOD_SCARED),
                         PetEmotionFsm::DefaultHoldMs(PET_MOOD_SCARED));
+                    /* v3 恢复链：2.2s 后晕、再 3.2s 后委屈（摔完的缓释叙事） */
+                    chain_step_ = 1;
+                    chain_ms_ = 2200;
                     break;
                 case PET_MOTION_SHAKE:
                     PetEmotion().Fire(PET_MOOD_DIZZY,
@@ -1233,11 +1284,63 @@ void PetFaceView::Tick() {
         lv_obj_set_style_transform_rotation(face_group_, 0, 0);
     }
 
+    /* ---------- 晕眩螺旋眼反向缓转（v2 深化） ---------- */
+    if (s.spiral) {
+        const int32_t t = lv_tick_get();
+        const int32_t outer = (t / 2) % 3600;              /* 0.1° 单位，7.2s/圈 */
+        const int32_t inner = (3600 - (t / 3) % 3600);     /* 反向，10.8s/圈 */
+        for (int i = 0; i < 2; i++) {
+            lv_obj_set_style_transform_rotation(spiral_outer_[i], outer, 0);
+            lv_obj_set_style_transform_rotation(spiral_inner_[i], inner, 0);
+        }
+    }
+
+    /* ---------- 晕眩整脸轻晃 ±3°（v3，叠在侧躺倾斜上） ---------- */
+    if (expr_ == kDizzy) {
+        const int sway = static_cast<int>(30.0f * sinf(breath_phase_ * 0.9f));
+        lv_obj_set_style_transform_rotation(
+            face_group_, static_cast<int32_t>(tilt_now_ * 10.0f) + sway, 0);
+    }
+
+    /* ---------- 惊吓眼微颤（v2 深化）：眼组 ±2px 高频抖 ---------- */
+    if (expr_ == kScared) {
+        const int j = ((lv_tick_get() / 130) & 1) ? 2 : -2;
+        lv_obj_set_x(eyes_group_, j);
+    } else {
+        lv_obj_set_x(eyes_group_, 0);
+    }
+
+    /* ---------- v3 过渡引擎：驱动「愣住→闭→换→睁」 ---------- */
+    if (trans_phase_ != 0) {
+        trans_ms_ -= kTickMs;
+        if (trans_phase_ == 1) {
+            float target = 0.10f;
+            if (trans_target_ == kSad && trans_ms_ > 120) {
+                target = 1.15f;   /* 难过前 150ms「愣住」瞪大 */
+            }
+            open_ratio_ += (target - open_ratio_) * 0.35f;
+            SetEyeOpenRatio(open_ratio_);
+            if (trans_ms_ <= 0) {
+                SwapToTarget();
+                trans_phase_ = 2;
+                trans_ms_ = (trans_target_ == kSad || trans_target_ == kSleepy)
+                                ? 260 : 130;
+            }
+        } else {
+            open_ratio_ += (1.0f - open_ratio_) * 0.22f;
+            SetEyeOpenRatio(open_ratio_);
+            if (trans_ms_ <= 0) {
+                SetEyeOpenRatio(1.0f);
+                trans_phase_ = 0;
+            }
+        }
+    }
+
     /* ---------- 被摸头强制闭眼 ---------- */
     if (pet_closed_ms_ > 0) {
         pet_closed_ms_ -= kTickMs;
         SetEyeOpenRatio(0.0f);
-    } else {
+    } else if (trans_phase_ == 0) {
         /* ---------- 眨眼（每 5 次来一次双眨） ---------- */
         if (s.arc_w == 0 && !s.spiral) {
             if (!blinking_) {
@@ -1265,9 +1368,16 @@ void PetFaceView::Tick() {
                         blink_wait_ms_ = 120;
                     } else {
                         blink_double_pending_ = false;
-                        /* 困的时候眨眼更慢 */
-                        const int base = (expr_ == kSleepy) ? 5200 : 2600;
-                        const int span = (expr_ == kSleepy) ? 6000 : 5000;
+                        /* 困的时候眨眼更慢，惊恐时眨眼急促（人类惊慌特征） */
+                        int base = 2600;
+                        int span = 5000;
+                        if (expr_ == kSleepy) {
+                            base = 5200;
+                            span = 6000;
+                        } else if (expr_ == kScared) {
+                            base = 1300;
+                            span = 1600;
+                        }
                         blink_wait_ms_ =
                             base + static_cast<int32_t>(esp_random() % span);
                     }
@@ -1289,6 +1399,16 @@ void PetFaceView::Tick() {
     gaze_dy_ += (gdy * gain - gaze_dy_) * 0.12f;
 #endif
     if (s.hl_pct > 0 && !s.spiral) {
+        /* v3：平静时定期「看向用户」（视线回中=对视），其余时间漫游 */
+        if (expr_ == kNeutral && trans_phase_ == 0) {
+            look_user_ms_ -= kTickMs;
+            if (look_user_ms_ <= 0) {
+                look_user_ms_ = 14000 + static_cast<int32_t>(esp_random() % 7000);
+                gaze_tx_ = 0;
+                gaze_ty_ = 0;
+                gaze_wait_ms_ = 2200;   /* 注视停留 */
+            }
+        }
         gaze_wait_ms_ -= kTickMs;
         if (gaze_wait_ms_ <= 0) {
             /* 漫游目标偏向屏幕下方偏左（设计稿：更有「在看」的感觉） */
@@ -1331,6 +1451,112 @@ void PetFaceView::Tick() {
             sleep_zz_ms_ = 2500 + static_cast<int32_t>(esp_random() % 1500);
             if (fx_ != nullptr) {
                 fx_->SpawnSleepZ();
+            }
+        }
+    }
+
+    /* ---------- 状态持续微动画（v2 深化）：泪/汗/怒符周期性冒出 ----------
+     * 和 Zzz 同款思路：粒子是现成的（PET_FX_TEAR/SWEAT/ANGER），
+     * 原先只在换表情瞬间放一次，现在持续态里也按节奏冒，脸更「活」。 */
+    state_fx_ms_ -= kTickMs;
+    if (state_fx_ms_ <= 0) {
+        switch (expr_) {
+            case kSad:
+                state_fx_ms_ = 4000 + static_cast<int32_t>(esp_random() % 2000);
+                SpawnFx(PET_FX_TEAR, 56, 176);   /* 左眼外眼角滚泪 */
+                break;
+            case kSick:
+                state_fx_ms_ = 5000 + static_cast<int32_t>(esp_random() % 2000);
+                SpawnFx(PET_FX_SWEAT, 200, 102);           /* 右太阳穴冒汗 */
+                break;
+            case kScared:
+                state_fx_ms_ = 3500 + static_cast<int32_t>(esp_random() % 2000);
+                SpawnFx(PET_FX_SWEAT,
+                        (esp_random() % 2) ? 200 : 40, 102);  /* 两侧交替 */
+                break;
+            case kAngry:
+                state_fx_ms_ = 6000 + static_cast<int32_t>(esp_random() % 2000);
+                SpawnFx(PET_FX_ANGER, 196, 88);            /* 右额💢 */
+                break;
+            default:
+                state_fx_ms_ = 1000;
+                break;
+        }
+    }
+
+    /* ---------- v3 微表情：周期性微动（人类表情的「小动作」） ---------- */
+    if (trans_phase_ == 0) {
+        micro_ms_ -= kTickMs;
+        if (micro_ms_ <= 0) {
+            switch (expr_) {
+                case kHappy:
+                    micro_ms_ = 3200 + static_cast<int32_t>(esp_random() % 1800);
+                    PlaySquash(1.035f, 0.965f, 240);   /* 笑得轻颤 */
+                    break;
+                case kSad:
+                    micro_ms_ = 8500 + static_cast<int32_t>(esp_random() % 2500);
+                    PlaySquash(1.02f, 0.985f, 260);    /* 呜咽式小抽 */
+                    break;
+                case kAngry:
+                    micro_ms_ = 6500 + static_cast<int32_t>(esp_random() % 2500);
+                    PlaySquash(1.05f, 0.93f, 170);     /* 气得小抖 */
+                    break;
+                case kHungry:
+                    micro_ms_ = 2800 + static_cast<int32_t>(esp_random() % 800);
+                    PlayChew();                        /* 馋嘴空嚼 */
+                    break;
+                default:
+                    micro_ms_ = 2000;
+                    break;
+            }
+        }
+
+        /* 眉动：怒眉火气波动 ±3° / 好奇右眉挑动 / 喜眉缓挑 / 惊眉轻颤 / 晕眩歪眉 */
+        if (expr_ == kAngry) {
+            const int wob = static_cast<int>(30.0f * sinf(breath_phase_ * 2.2f));
+            lv_obj_set_style_transform_rotation(brow_[0], 150 + wob, 0);
+            lv_obj_set_style_transform_rotation(brow_[1], -150 - wob, 0);
+        } else if (expr_ == kCurious) {
+            const int lift = -70 + static_cast<int>(30.0f * sinf(breath_phase_ * 1.4f));
+            lv_obj_set_style_transform_rotation(brow_[1], lift, 0);
+        } else if (expr_ == kHappy || expr_ == kHungry) {
+            /* 喜眉/期盼眉缓慢一挑一挑（±4°） */
+            const int lift = static_cast<int>(40.0f * sinf(breath_phase_ * 1.1f));
+            lv_obj_set_style_transform_rotation(brow_[0], 35 + lift, 0);
+            lv_obj_set_style_transform_rotation(brow_[1], -35 - lift, 0);
+        } else if (expr_ == kScared) {
+            /* 惊讶眉高频轻颤（±2°） */
+            const int tr = static_cast<int>(20.0f * sinf(breath_phase_ * 7.5f));
+            lv_obj_set_style_transform_rotation(brow_[0], 35 + tr, 0);
+            lv_obj_set_style_transform_rotation(brow_[1], -35 - tr, 0);
+        } else if (expr_ == kDizzy) {
+            /* 晕眩眉左右反相歪斜（±3°），晕乎乎 */
+            const int tilt = static_cast<int>(30.0f * sinf(breath_phase_ * 0.9f));
+            lv_obj_set_style_transform_rotation(brow_[0], tilt, 0);
+            lv_obj_set_style_transform_rotation(brow_[1], -tilt, 0);
+        }
+
+        /* 睡意起伏：半闭眼缓慢开合（非眨眼期） */
+        if (expr_ == kSleepy && !blinking_ && pet_closed_ms_ <= 0) {
+            SetEyeOpenRatio(1.0f + 0.12f * sinf(breath_phase_ * 0.6f));
+        }
+    }
+
+    /* ---------- v3 FALL 恢复链：惊 → 晕 → 委屈（场景叙事） ---------- */
+    if (chain_step_ != 0) {
+        chain_ms_ -= kTickMs;
+        if (chain_ms_ <= 0) {
+            if (chain_step_ == 1) {
+                chain_step_ = 2;
+                chain_ms_ = 3200;
+                PetEmotion().Fire(PET_MOOD_DIZZY,
+                                  PetEmotionFsm::DefaultPriority(PET_MOOD_DIZZY),
+                                  3000);
+            } else {
+                chain_step_ = 0;
+                PetEmotion().Fire(PET_MOOD_SAD,
+                                  PetEmotionFsm::DefaultPriority(PET_MOOD_SAD),
+                                  4000);
             }
         }
     }

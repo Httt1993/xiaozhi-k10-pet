@@ -162,6 +162,8 @@ private:
     void SetFishState(FishIconState st);
     void SetHeartState(HeartIconState st);
     void UpdateHungerShake(int satiety);
+    /* 过渡引擎（v3）：眨眼式换脸的「落点」——真正切表情+重绘 */
+    void SwapToTarget();
 
     /* 底部一排：小鱼干(饱食) / 爱心(心情) / 电池(精力) / 金币数字 */
     lv_obj_t* stat_fish_grp_ = nullptr;   /* 小鱼干宿主（抖动动画作用对象） */
@@ -223,6 +225,23 @@ private:
 
     /* 困觉 Zzz 节流 */
     int32_t sleep_zz_ms_ = 0;
+
+    /* 状态持续微动画节流（泪/汗/怒符周期冒出，v2 深化） */
+    int32_t state_fx_ms_ = 0;
+
+    /* ---- 表情过渡状态机（v3）：眨眼式换脸 ----
+     * phase 1=过渡前（闭眼/愣住，expr_ 还是旧的） 2=过渡后（睁开，expr_ 已换） */
+    int trans_phase_ = 0;
+    int32_t trans_ms_ = 0;
+    Expr trans_target_ = kNeutral;
+
+    /* v3 微表情调度 */
+    int32_t micro_ms_ = 0;      /* 周期性微动（笑颤/呜咽/馋嚼/怒抖）节流 */
+    int32_t look_user_ms_ = 0;  /* neutral 周期性「注视用户」剩余 */
+
+    /* FALL 恢复链：惊→晕→委屈（v3 场景联动叙事） */
+    int chain_step_ = 0;        /* 0=off 1=惊后待晕 2=晕后待委屈 */
+    int32_t chain_ms_ = 0;
 
     /* 上一个情绪（用于切换时触发 FX） */
     int last_mood_ = -1;
