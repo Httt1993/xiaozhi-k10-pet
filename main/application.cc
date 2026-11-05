@@ -971,6 +971,9 @@ void Application::HandleWakeWordDetectedEvent() {
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
+        /* PET_PATCH v1.9: 对话中被再次呼唤同样只回「我在」，不介绍自己。
+         * 这条路径本来也不发 SendWakeWordDetected，此处仅补齐应答字幕。 */
+        Board::GetInstance().GetDisplay()->ShowNotification("我在", 2000);
         // Clear send queue to avoid sending residues to server
         while (audio_service_.PopPacketFromSendQueue())
             ;
@@ -1037,20 +1040,31 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+
+    /* PET_PATCH v1.9 (2026-11-05): 唤醒词只表示「呼叫设备本人」，不是一句用户输入。
+     * 旧行为（CONFIG_SEND_WAKE_WORD_DATA=y）：把唤醒词 Opus 音频 +
+     *   {"type":"listen","state":"detect","text":"星黛露"} 当作本轮对话的第一句话
+     *   发给云端。服务端 ASR/LLM 收到「星黛露」这个公众人物名字后会输出
+     *   人物 / 角色 / 背景介绍，而不是应答 —— 这不是「叫它一声」该有的反应。
+     * 现在：唤醒词音频与 detect 文本一律不上云，本地固定回「我在」后直接开麦；
+     * 孩子随后真正说的话照常走 SendStartListening -> 上云 -> LLM -> TTS，
+     * 对话链路、本地命令词、宠物状态与看板等其余交互完全不变。
+     * 单次命中即唤醒：MultiNet 在 custom_wake_word.cc 里 ESP_MN_STATE_DETECTED
+     * 直接回调并停止检测，从来不需要连喊多声，这里也不加任何计数门槛。 */
 #if CONFIG_SEND_WAKE_WORD_DATA
-    // Encode and send the wake word data to the server
-    while (auto packet = audio_service_.PopWakeWordPacket()) {
-        protocol_->SendAudio(std::move(packet));
+    // 唤醒词音频只用于本地检测，不再作为对话首句上传；drain 掉编码队列，
+    // 避免 opus 包残留在队列里被下一轮误当作用户语音发送。
+    while (audio_service_.PopWakeWordPacket()) {
+        // discard
     }
-    // Set the chat state to wake word detected
-    protocol_->SendWakeWordDetected(wake_word);
-    SetListeningMode(GetDefaultListeningMode());
-#else
-    // Set flag to play popup sound after state changes to listening
-    // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
+#endif
+    // 本地固定应答「我在」：屏幕字幕 + 提示音，不经过 LLM，杜绝任何介绍类内容。
+    // PlaySound 不能在这里直接调 —— 会被 EnableVoiceProcessing 的 ResetDecoder 清掉，
+    // 所以沿用官方的 play_popup_on_listening_ 标志，由 StartListeningAudio 在
+    // ResetDecoder 之后播放；ShowNotification 是独立 label + 定时器，不受状态切换清空。
+    Board::GetInstance().GetDisplay()->ShowNotification("我在", 2000);
     play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
-#endif
 }
 
 void Application::HandleStateChangedEvent() {
