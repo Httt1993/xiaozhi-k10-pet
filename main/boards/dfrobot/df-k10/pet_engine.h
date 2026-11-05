@@ -29,7 +29,7 @@ namespace pet_engine {
 
 /** 运行时配置。字段与 pet-core.js 的 DEFAULTS 一一对应。 */
 struct Config {
-    std::string pet_name = "跳跳";
+    std::string pet_name = "星黛露";
     double decay_step_hours = 1.0 / 120.0;  // 默认 30 秒衰减一步（PET_DECAY_STEP_SEC=30）
     int max_decay_steps = 2880;       // 单次最多补算 2880 步（=24h），防久不开机瞬间清零
     int64_t sick_after_starving = 43200;  // 饿到 0 持续 12h → 生病

@@ -947,14 +947,14 @@ endchoice
 
 config CUSTOM_WAKE_WORD
     string "Custom Wake Word"
-    default "tiao tiao"
+    default "xing dai lu"
     depends on USE_CUSTOM_WAKE_WORD
     help
         Custom Wake Word, use pinyin for Chinese, separated by spaces
 
 config CUSTOM_WAKE_WORD_DISPLAY
     string "Custom Wake Word Display"
-    default "跳跳"
+    default "星黛露"
     depends on USE_CUSTOM_WAKE_WORD
     help
         Greeting sent to the server after wake word detection
