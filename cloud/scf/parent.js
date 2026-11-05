@@ -90,6 +90,9 @@ button.primary[disabled]{background:#d9d2c6;cursor:default}
   background:#2a2723;color:#fff;font-size:13px;padding:10px 16px;border-radius:99px;
   opacity:0;pointer-events:none;transition:.25s;max-width:88vw;z-index:10}
 #toast.on{opacity:1;transform:translate(-50%,0)}
+#netbar{display:none;position:fixed;left:0;right:0;top:0;z-index:11;
+  background:#b4423a;color:#fff;font-size:12.5px;text-align:center;padding:7px 12px;
+  box-shadow:0 2px 8px rgba(0,0,0,.12)}
 footer{text-align:center;color:#b0a698;font-size:11.5px;margin-top:18px;line-height:1.7}
 `;
 
@@ -99,9 +102,32 @@ var Q_STORE='pet_cmdq';        /* 我在这个手机上点过的指令，等设�
 var RETRY_MS=30000;            /* 没回执就重发：云函数可能同时活着好几个实例，
                                   指令只排在其中一个的内存里，重发是为了让每个活着的实例都拿到 */
 var GIVE_UP_MS=8*60*1000;      /* 8 分钟还没确认就不再自动重发（不删，等设备下次上报再说） */
-var data=null;
+var NET_TIMEOUT_MS=8000;       /* 单次请求超时：手机切网/息屏时 fetch 会「半开」挂死 */
+var data=null, netFail=0, lastKick=-100000;
 
 function el(id){return document.getElementById(id)}
+function netState(bad,msg){
+  var n=el('netbar'); if(!n)return;
+  n.style.display=bad?'block':'none';
+  if(msg)n.textContent=msg;
+}
+/* 所有请求统一带超时：没有超时，一条挂死的 fetch 会让页面停在旧数据上永不恢复 */
+function fetchT(path,opt){
+  var ac=new AbortController();
+  var timer=setTimeout(function(){ac.abort()},NET_TIMEOUT_MS);
+  var done=function(){clearTimeout(timer)};
+  return fetch(path,Object.assign({},opt||{},{signal:ac.signal,cache:'no-store'}))
+    .then(function(r){done();return r},function(e){done();throw e});
+}
+/* 网络恢复时给「已放弃重发」的指令重新开一个 8 分钟窗口。
+   at 不变 → 云端按 at 去重，不会重复生效。 */
+function resetGiveUp(){
+  var a=ackNo(), all=qload(), changed=false;
+  for(var i=0;i<all.length;i++){
+    if(all[i].at>a){ all[i].retriedAt=Date.now(); changed=true; }
+  }
+  if(changed)qsave(all);
+}
 
 /* ---- 本机指令队列：解决「云函数多实例导致指令静默丢失」 ---- */
 function qload(){
@@ -126,7 +152,7 @@ function qdrop(){
 function qpost(it){
   var h={'Content-Type':'application/json'};
   if(q()) h['X-Pet-Key']=q();
-  return fetch(apiUrl(),{method:'POST',headers:h,body:JSON.stringify({cmd:it.cmd,args:it.args,at:it.at})})
+  return fetchT(apiUrl(),{method:'POST',headers:h,body:JSON.stringify({cmd:it.cmd,args:it.args,at:it.at})})
     .then(function(r){return r.json()});
 }
 /* 每条没回执的指令再发一次（同一个 at，云端会去重，不会重复生效） */
@@ -135,7 +161,9 @@ function qretry(){
   for(var i=0;i<all.length;i++){
     var it=all[i];
     if(it.at<=ackNo()) continue;
-    if(now-it.at>GIVE_UP_MS) continue;
+    /* 用 retriedAt 作窗口起点：网络恢复后能重新获得 8 分钟重发机会，
+       而 at 保持不变，云端去重依旧生效（不会重复喂食/发币） */
+    if(now-(it.retriedAt||it.at)>GIVE_UP_MS) continue;
     qpost(it).catch(function(){});
   }
 }
@@ -323,21 +351,39 @@ function send(cmd,args,okMsg){
 function refresh(){
   var h={};
   if(q()) h['X-Pet-Key']=q();
-  fetch(apiUrl(),{headers:h})
+  return fetchT(apiUrl(),{headers:h})
     .then(function(r){
       if(r.status===401){ el('gate').style.display='flex'; return null; }
+      if(!r.ok) throw new Error('HTTP'+r.status);
       return r.json();
     })
     .then(function(j){
       if(j){
+        var wasBad=netFail>0;
+        netFail=0; netState(false);
+        if(wasBad) toast('已自动重连，连接恢复');
         data=j;
         qdrop();     /* 设备回执到的指令从本机队列删掉 */
         render();
         el('gate').style.display='none';
       }
     })
-    .catch(function(){});
+    .catch(function(e){
+      netFail++;
+      netState(true,'⚠️ 连不上云端，正在自动重连…（第 '+netFail+' 次）· 恢复后会自动补发未送达的指令');
+    });
 }
+
+/* 网络恢复 / 从后台切回来：立刻刷新 + 补发，并重置「8 分钟放弃」窗口。
+   旧版只有 15s 定时轮询且失败静默，手机息屏回来后经常一直停在旧数据。 */
+function kick(){
+  var n=Date.now(); if(n-lastKick<2000) return; lastKick=n;
+  resetGiveUp(); refresh(); qretry();
+}
+window.addEventListener('online',kick);
+window.addEventListener('focus',kick);
+window.addEventListener('pageshow',kick);
+document.addEventListener('visibilitychange',function(){ if(!document.hidden) kick(); });
 
 el('gok').onclick=function(){
   var v=(el('gkey').value||'').trim();
@@ -374,6 +420,7 @@ function renderParentPage(petName) {
   <button class="primary" id="gok">进入看板</button>
 </div></div>
 
+<div id="netbar"></div>
 <div id="toast"></div>
 <script>${JS}</script>
 </body></html>`;

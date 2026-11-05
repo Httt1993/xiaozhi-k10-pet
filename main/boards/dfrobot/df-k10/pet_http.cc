@@ -19,6 +19,7 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cerrno>
 #include <atomic>
 #include <ctime>
 #include <string>
@@ -57,17 +58,35 @@ int64_t NowSec() {
     return (t > 1600000000) ? static_cast<int64_t>(t) : 0;
 }
 
-/* 循环发送直到全部字节发出（send() 不保证一次发完大 body） */
+/* 循环发送直到全部字节发出。
+ * 2026-11-05 实测修复：看板 HTML 约 13KB，一次性 send() 在 lwIP 发送窗口不足时
+ * 会返回 ENOMEM/EAGAIN，旧代码直接放弃 → 浏览器收到「HTTP 200 但 0 字节」，
+ * 页面加载到超时，看板表现为「一直在重连」。改成分块 1KB + 可重试错误退避重发。 */
 static bool SendAll(int fd, const char* data, size_t len) {
     size_t sent = 0;
+    int stall = 0;
     while (sent < len) {
-        int n = send(fd, data + sent, len - sent, 0);
-        if (n <= 0) {
-            ESP_LOGW(TAG, "SendAll: send() returned %d at %u/%u", n,
-                     (unsigned)sent, (unsigned)len);
-            return false;
+        size_t chunk = (len - sent > 1024) ? 1024 : (len - sent);
+        int n = send(fd, data + sent, chunk, 0);
+        if (n > 0) {
+            sent += (size_t)n;
+            stall = 0;
+            continue;
         }
-        sent += (size_t)n;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                      errno == ENOMEM || errno == EINTR)) {
+            /* TCP 窗口暂时为 0 / pbuf 不够：等 50ms 再试，最多累计 3s */
+            if (++stall > 60) {
+                ESP_LOGW(TAG, "SendAll: stall at %u/%u errno=%d",
+                         (unsigned)sent, (unsigned)len, errno);
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        ESP_LOGW(TAG, "SendAll: send() returned %d at %u/%u errno=%d", n,
+                 (unsigned)sent, (unsigned)len, errno);
+        return false;
     }
     return true;
 }
@@ -80,13 +99,15 @@ void SendHttpResponse(int fd, int status, const char* content_type,
         status == 401 ? "Unauthorized" :
         status == 403 ? "Forbidden" :
         status == 400 ? "Bad Request" :
-        status == 404 ? "Not Found" : "Internal Server Error";
+        status == 404 ? "Not Found" :
+        status == 503 ? "Service Unavailable" : "Internal Server Error";
     char header[256];
     int hlen = snprintf(header, sizeof(header),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %d\r\n"
         "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: no-store\r\n"
         "Connection: close\r\n\r\n",
         status, status_text, content_type, (int)body.size());
     SendAll(fd, header, (size_t)hlen);
@@ -252,11 +273,38 @@ background:#e89b4b;color:#fff;border:none;border-radius:12px;font-size:16px}
 /* PIN 改存 sessionStorage：关掉标签页就要重新输，避免「电脑端不用输 PIN」的观感（B-01） */
 let PIN=sessionStorage.getItem('pet_pin')||'';
 let seq=parseInt(localStorage.getItem('pet_seq')||'1');
-let pollBusy=false, failCount=0, pollDelay=3000;
+let pollBusy=false, failCount=0, pollDelay=3000, nextPollAt=0, pollStart=0;
+let kickFlag=false, curAbort=null;
 const $=id=>document.getElementById(id);
-/* 自调度轮询：连续失败时指数退避（3s→6s→12s→…→30s），成功一次立刻回到 3s。
-   这样既不误报「连接失败」（瞬时抖动只退避不告警），也不在设备挣扎时雪崩式重试。 */
-function schedulePoll(){setTimeout(async()=>{await poll();schedulePoll();},pollDelay);}
+/* ★A-08 复发根因（2026-11-05 实测）：WiFi 瞬断会让 TCP「半开」，
+   浏览器 fetch 既不成功也不报错，可能挂好几分钟；旧代码用
+   setTimeout(async()=>{await poll();schedulePoll()}) 自调度，
+   一条挂死的请求就把整条轮询链掐断 —— 设备恢复了也不会再发请求，
+   于是状态栏永远停在「自动重连中」。改成「带超时 + 独立看门狗」。 */
+function fetchT(path,opt,ms,track){
+const ac=new AbortController();
+const timer=setTimeout(()=>ac.abort(),ms||5000);
+const done=()=>{clearTimeout(timer);if(curAbort===ac)curAbort=null;};
+if(track)curAbort=ac;
+return fetch(path,Object.assign({},opt||{},{signal:ac.signal,cache:'no-store'}))
+.then(r=>{done();return r},e=>{done();throw e});}
+/* 看门狗不依赖任何 await 链：每秒检查一次；请求卡死超过 12s 主动掐断，
+   下一秒就会重发。连续失败指数退避 3→6→12→20s，成功一次立刻回到 3s。 */
+setInterval(()=>{
+if(!window.__pollOn||!PIN)return;
+if(pollBusy){if(curAbort&&Date.now()-pollStart>12000)curAbort.abort();return;}
+if(kickFlag||Date.now()>=nextPollAt){kickFlag=false;poll();}
+},1000);
+/* 网络恢复 / 切回前台：掐掉半开连接，退避归零，立刻重试。
+   刻意不清 failCount —— 恢复后 poll() 成功时要靠它弹「已自动重连」提示。
+   节流 1.5s：focus/pageshow/visibilitychange 常连着触发，别把正常请求也掐掉。 */
+let lastKick=0;
+function kick(){const n=Date.now();if(n-lastKick<1500)return;lastKick=n;
+kickFlag=true;pollDelay=3000;nextPollAt=0;if(curAbort)curAbort.abort();}
+window.addEventListener('online',kick);
+window.addEventListener('focus',kick);
+window.addEventListener('pageshow',kick);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)kick();});
 /* 轻量 toast：不依赖预置 HTML/CSS，动态创建，2.4s 后自动消失。用于「已自动重连」等一次性提示。 */
 function toast(msg){const t=document.createElement('div');t.textContent=msg;
 t.style.cssText='position:fixed;left:50%;top:16px;transform:translateX(-50%);background:rgba(50,50,50,.92);color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;z-index:9999;opacity:0;transition:opacity .3s;max-width:80%';
@@ -265,26 +313,29 @@ setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},2400);}
 function showLogin(msg){$('pin-overlay').style.display='flex';$('main').style.display='none';
 if(msg)$('pin-err').textContent=msg}
 function showMain(){$('pin-overlay').style.display='none';$('main').style.display='block';
-if(!window.__pollOn){window.__pollOn=true;poll();schedulePoll();}}
+if(!window.__pollOn){window.__pollOn=true;nextPollAt=0;poll();}}
 async function doLogin(){const v=$('pin-input').value.trim();
 if(!v){showLogin('请输入 PIN');return}
 try{
-const r=await fetch('/api/state',{headers:{'x-pin':v}});
+const r=await fetchT('/api/state',{headers:{'x-pin':v}},6000,false);
 if(r.status===401){showLogin('PIN 错误，请重试');return}
 if(!r.ok){showLogin('设备未就绪（'+r.status+'），稍后重试');return}
 PIN=v;sessionStorage.setItem('pet_pin',PIN);showMain();
-}catch(e){showLogin('连不上设备，检查是否在同一 WiFi')}}
-async function api(path,opt){opt=opt||{};
+}catch(e){showLogin('连不上设备：检查是否在同一 WiFi，或改用屏幕上显示的 IP')}}
+async function api(path,opt,track){opt=opt||{};
 opt.headers=Object.assign({'x-pin':PIN},opt.headers||{});
-const r=await fetch(path,opt);
+const r=await fetchT(path,opt,5000,track);
 if(r.status===401){sessionStorage.removeItem('pet_pin');PIN='';
 showLogin('PIN 已失效，请重新输入');throw new Error('NO_PIN')}
+if(!r.ok)throw new Error(r.status===503?'BUSY':'HTTP'+r.status);
 return r.json()}
-async function poll(){if(pollBusy)return;pollBusy=true;try{
-const d=await api('/api/state');
+async function poll(){if(pollBusy)return;pollBusy=true;pollStart=Date.now();try{
+const d=await api('/api/state',null,true);
 if(failCount>0)toast('已自动重连，连接恢复');
-failCount=0;pollDelay=3000;$('status-bar').textContent='k10-pet.local:8080 · 连接正常';
-if(!d.status){pollBusy=false;return}
+/* 开机时设备没就绪会留在 PIN 遮罩；看门狗重连成功后自动进主界面，不用手动刷新 */
+if($('pin-overlay').style.display!=='none'&&PIN)showMain();
+failCount=0;pollDelay=3000;$('status-bar').textContent=location.host+' · 本地直连 · 连接正常';
+if(!d.status)return;
 const s=d.status;
 $('v-hunger').textContent=s.hunger;$('b-hunger').style.width=Math.min(100,s.hunger)+'%';
 $('v-mood').textContent=s.mood;$('b-mood').style.width=Math.min(100,s.mood)+'%';
@@ -293,13 +344,18 @@ $('v-coins').textContent=s.coins;
 $('face').textContent=s.sick?'🤒':s.hunger<=15?'🥺':s.mood<=20?'😢':s.mood>=80?'😺':'🙂';
 $('say').textContent=d.say||'…';
 renderTasks(d.tasks||[]);
-}catch(e){failCount++;
-/* 连续失败才退避+提示，成功一次立刻恢复 —— 修「一直显示连接失败重试中」（A-08）。
-   退避而不是硬撞：设备若短暂卡顿，退避能让它缓过来，否则越重试越堵。 */
-if(failCount===1){pollDelay=6000}
-else if(failCount>1){pollDelay=Math.min(pollDelay*2,30000)}
-if(failCount>=2)$('status-bar').textContent='⚠️ 连接失败，自动重连中…（'+failCount+' 次）'}
-finally{pollBusy=false}}
+}catch(e){
+if(e&&e.message==='NO_PIN'){$('status-bar').textContent='需要重新输入 PIN';}
+else{
+failCount++;
+if(failCount===1){pollDelay=3000}
+else{pollDelay=Math.min(pollDelay*2,20000)}
+const why=e&&e.message==='BUSY'?'设备正忙':'连不上设备';
+$('status-bar').textContent=failCount>=2
+?('⚠️ '+why+'，自动重连中…（'+failCount+' 次）· 若打不开请改用屏幕上的 IP')
+:('连接有点不稳，正在重试…');
+}
+}finally{pollBusy=false;curAbort=null;nextPollAt=kickFlag?0:Date.now()+pollDelay;}}
 let lastTasks=[];
 function renderTasks(tasks){const el=$('task-list');lastTasks=tasks;
 if(!tasks.length){el.innerHTML='<div style="color:#b09070;text-align:center;padding:12px">暂无任务</div>';return}
@@ -336,16 +392,17 @@ localStorage.setItem('pet_seq',seq);
 $('say').textContent=d.say||(d.ok?'完成！':'失败');
 if(d.ok===false)$('say').textContent='⚠️ '+(d.say||d.code||'失败');
 poll();
-}catch(e){$('say').textContent='⚠️ 指令发送失败'}}
+}catch(e){$('say').textContent='⚠️ 指令发送失败（不会重复执行）';kick();}}
 function publishTask(){const title=prompt('任务名称：');
 if(!title)return;const r=prompt('奖励金币数：','10');
 cmd('task_publish',{title,reward:parseInt(r)||10})}
 /* 已有 PIN 则先校验再进主界面；过期就弹登录框 */
 if(PIN){doLoginWithSaved()}else{showLogin('')}
 async function doLoginWithSaved(){try{
-const r=await fetch('/api/state',{headers:{'x-pin':PIN}});
+const r=await fetchT('/api/state',{headers:{'x-pin':PIN}},6000,false);
 if(r.ok){showMain()}else{sessionStorage.removeItem('pet_pin');PIN='';showLogin('')}
-}catch(e){showLogin('')}}
+}catch(e){/* 设备暂时不可达：保留 PIN，让看门狗继续自动重连，不要清空 */
+showLogin('设备暂时没回应，正在自动重连…');window.__pollOn=true;nextPollAt=0;}}
 </script>
 </body>
 </html>)rawliteral";
@@ -634,7 +691,10 @@ void HandleRemindCmd(int fd, const std::string& headers, const std::string& body
  * （HTML + 轮询 + 预连接），单线程 accept 一旦被慢客户端卡住 5 秒，
  * 其他人全部超时 —— 就是「看板过一会儿显示连接失败」「手机端打不开」的根源（A-08/B-01）。
  */
-constexpr int kMaxClients = 4;
+/* 2026-11-05：4 个槽位不够 —— 浏览器会为同一页面预开 4~6 条 TCP 连接，
+ * 这些「只连不发」的预连接把槽位占满后，真正的 /api/state 全被 503，
+ * 看板就一直「自动重连中」。提到 6 并缩短空连接超时（见下）。 */
+constexpr int kMaxClients = 6;
 std::atomic<int> g_active_clients{0};
 
 static void PetHttpClientTask(void* arg) {
@@ -717,7 +777,7 @@ static void PetHttpTask(void* arg) {
         vTaskDelete(nullptr);
         return;
     }
-    if (listen(listen_fd, kMaxClients + 2) < 0) {
+    if (listen(listen_fd, kMaxClients + 4) < 0) {
         ESP_LOGE(TAG, "listen() failed: errno=%d", errno);
         close(listen_fd);
         vTaskDelete(nullptr);
@@ -739,10 +799,13 @@ static void PetHttpTask(void* arg) {
             continue;
         }
 
-        /* 设置超时，防止慢速客户端卡住 */
-        struct timeval tv = {.tv_sec = 3, .tv_usec = 0};
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        /* 收 2s：浏览器预连接（连上不发请求）要尽快释放槽位；
+           发 8s：看板 HTML 十几 KB 在弱 WiFi 下需要分块慢慢发，
+           旧的 3s 会把大页面发成「200 但 0 字节」。 */
+        struct timeval rcv_tv = {.tv_sec = 2, .tv_usec = 0};
+        struct timeval snd_tv = {.tv_sec = 8, .tv_usec = 0};
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 
         if (g_active_clients.load() >= kMaxClients) {
             /* 过载保护：直接回 503 并关掉，好过把所有人一起拖死 */
@@ -752,7 +815,9 @@ static void PetHttpTask(void* arg) {
         }
 
         g_active_clients.fetch_add(1);
-        BaseType_t ok = xTaskCreate(PetHttpClientTask, "pet_httpc", 6144,
+        /* 6×5120=30KB，与旧 4×6144=24KB 同量级，不给内部 RAM 加太大压力
+           （看板 HTML 是静态串不进栈，栈里主要是一个 2KB 请求缓冲 + cJSON） */
+        BaseType_t ok = xTaskCreate(PetHttpClientTask, "pet_httpc", 5120,
                                     (void*)(intptr_t)client_fd, 4, nullptr);
         if (ok != pdPASS) {
             g_active_clients.fetch_sub(1);
