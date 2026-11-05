@@ -352,7 +352,7 @@ qretry();
 `;
 
 function renderParentPage(petName) {
-  const name = String(petName || '晚安兔');
+  const name = String(petName || '跳跳');
   return `<!doctype html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8">

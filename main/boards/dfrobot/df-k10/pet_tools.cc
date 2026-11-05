@@ -897,7 +897,13 @@ bool PetTools::HandleSpokenCommand(const char* text) {
         {"吃饭", "喂我吃", "feed"},
         {"摸摸头", "摸摸你", "pet"},
         {"陪我玩", "玩游戏", "play"},
-        {"睡觉", "晚安", "sleep"},
+        /* 睡觉口令固定「睡觉 / 我要睡了」，不要加「晚安」。
+         * 原因：唤醒后固件会把唤醒词音频编码上云，ASR 回显成一句文本再走这里；
+         * find 是子串匹配，旧名含「晚安」时曾误命中 sleep → 立刻进睡觉并
+         * goodbye 结束会话，孩子来不及说下一句（2026-11-05 真机日志实证）。
+         * v1.7 改名「跳跳」后撞词消失，但保留该口令与设计文档/模拟器口径一致，
+         * 也避免以后再换成含「晚安」的词时复发。 */
+        {"睡觉", "我要睡了", "sleep"},
     };
     for (const auto& c : kCmds) {
         if (t.find(c.key1) != std::string::npos || t.find(c.key2) != std::string::npos) {

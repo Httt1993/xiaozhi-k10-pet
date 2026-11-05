@@ -469,7 +469,7 @@ void PetCloud::RefreshStatusFromState() {
     cJSON* p = cJSON_GetObjectItem(root, "pet");
     if (cJSON_IsObject(p)) {
         status_.valid = true;
-        status_.name = GetStr(p, "name", "晚安兔");
+        status_.name = GetStr(p, "name", "跳跳");
         status_.energy = GetInt(p, "energy", 0);
         status_.hunger = GetInt(p, "hunger", 0);
         status_.mood = GetInt(p, "mood", 0);
@@ -517,7 +517,7 @@ PetStatus PetCloud::GetStatus() {
         /* 没初始化就按默认值给，避免工具层拿到全 0 的假状态 */
         PetStatus s;
         s.valid = false;
-        s.name = "晚安兔";
+        s.name = "跳跳";
         s.energy = 80;
         s.hunger = 60;
         s.mood = 80;

@@ -58,9 +58,9 @@ CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64
 CONFIG_ESP_COREDUMP_UART_DELAY=0
 CONFIG_ESP_COREDUMP_LOGS=y
 
-# ---- 晚安兔：自定义唤醒词（MultiNet6 中文，2026-11-05）----
+# ---- 跳跳：自定义唤醒词（MultiNet6 中文，2026-11-05）----
 # 真机生效条件：assets.bin 带 mn6_cn 模型，且 index.json 里只有一条命令
-# {command:"wan an tu", text:"晚安兔", action:"wake"}。
+# {command:"tiao tiao", text:"跳跳", action:"wake"}。
 # afe_audio_engine.cc 开机探测到 MultiNet 模型会自动切自定义唤醒词，
 # 不依赖 xiaozhi.me 网页控制台（线上生成器只有「关闭/预设」两档）。
 # choice WAKE_WORD_TYPE 默认是 USE_AFE_WAKE_WORD，这里显式切到 CUSTOM；
@@ -69,10 +69,11 @@ CONFIG_ESP_COREDUMP_LOGS=y
 # 不要写成不带 _QUANT 的形式；试构建日志须出现 "multinet models: mn6_cn"。
 CONFIG_USE_CUSTOM_WAKE_WORD=y
 CONFIG_SR_MN_CN_MULTINET6_QUANT=y
-CONFIG_CUSTOM_WAKE_WORD="wan an tu"
-CONFIG_CUSTOM_WAKE_WORD_DISPLAY="晚安兔"
+CONFIG_CUSTOM_WAKE_WORD="tiao tiao"
+CONFIG_CUSTOM_WAKE_WORD_DISPLAY="跳跳"
 CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20
-# 真机实测（2026-11-05 下午）：首版固件喊「晚安兔」完全无反应。
+# 真机实测（2026-11-05 下午）：首版固件喊当时的名字「晚安兔」完全无反应
+# （v1.7 起已改名「跳跳」；下面是当时的状态机根因，与名字无关，保留备查）。
 # 根因不是模型/命令词，而是状态机：K10 有 AEC -> GetDefaultListeningMode()
 # 返回 Realtime，开机后 idle -> connecting -> listening 并常驻 listening；
 # 而 WAKE_WORD_DETECTION_IN_LISTENING 默认 n，ConfigureWakeWordForListening()
