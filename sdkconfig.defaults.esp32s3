@@ -72,3 +72,11 @@ CONFIG_SR_MN_CN_MULTINET6_QUANT=y
 CONFIG_CUSTOM_WAKE_WORD="wan an tu"
 CONFIG_CUSTOM_WAKE_WORD_DISPLAY="晚安兔"
 CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20
+# 真机实测（2026-11-05 下午）：首版固件喊「晚安兔」完全无反应。
+# 根因不是模型/命令词，而是状态机：K10 有 AEC -> GetDefaultListeningMode()
+# 返回 Realtime，开机后 idle -> connecting -> listening 并常驻 listening；
+# 而 WAKE_WORD_DETECTION_IN_LISTENING 默认 n，ConfigureWakeWordForListening()
+# 走 #else 分支调用 EnableWakeWordDetection(false) -> CustomWakeWord::Stop()，
+# AFE 音频不再喂给 MultiNet，检测通道整个关掉。显式打开后 idle / listening
+# 两种状态都保持唤醒检测在线（官方开关：允许唤醒词打断当前对话）。
+CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=y
