@@ -32,7 +32,7 @@
 /** 宠物状态快照。给灯/脸联动和 AI 工具用，不含原始 JSON。 */
 struct PetStatus {
     bool valid = false;
-    std::string name = "乔利";
+    std::string name = "晚安兔";
     int energy = 0;
     int hunger = 0;
     int mood = 0;

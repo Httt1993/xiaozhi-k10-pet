@@ -8,7 +8,7 @@
  *
  * 环境变量（都可选）：
  *   PET_KEY        共享口令。设置后所有请求必须带 X-Pet-Key 或 ?key=
- *   PET_NAME       宠物名字，默认「乔利」
+ *   PET_NAME       宠物名字，默认「晚安兔」
  *   ...其余数值见 pet-core.js 的 DEFAULTS，同名覆盖
  */
 
