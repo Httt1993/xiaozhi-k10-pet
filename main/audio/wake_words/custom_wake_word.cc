@@ -4,6 +4,7 @@
 #include "assets.h"
 
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_mn_iface.h>
 #include <esp_mn_models.h>
 #include <esp_mn_speech_commands.h>
@@ -85,6 +86,8 @@ void CustomWakeWord::ParseWakenetModelConfig() {
 bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     codec_ = codec;
     commands_.clear();
+    ESP_LOGI(TAG, "Free PSRAM before MultiNet init: %u bytes",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     if (models_list == nullptr) {
         language_ = "cn";
@@ -117,7 +120,20 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     }
 
     multinet_ = esp_mn_handle_from_name(mn_name_);
+    if (multinet_ == nullptr) {
+        ESP_LOGE(TAG, "No MultiNet handle for model '%s'", mn_name_);
+        return false;
+    }
     multinet_model_data_ = multinet_->create(mn_name_, duration_);
+    if (multinet_model_data_ == nullptr) {
+        // Do not dereference the NULL model data below: on memory-constrained
+        // boards this used to panic the whole device (StoreProhibited) and
+        // trap it in a reboot/core-dump loop. Falling back to no wake word is
+        // much safer and the caller already handles Initialize() == false.
+        ESP_LOGE(TAG, "Failed to create MultiNet model data (PSRAM exhausted): free=%u bytes",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        return false;
+    }
     multinet_->set_det_threshold(multinet_model_data_, threshold_);
     input_buffer_.reserve(multinet_->get_samp_chunksize(multinet_model_data_));
     esp_mn_commands_clear();

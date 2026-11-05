@@ -92,10 +92,13 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
             }
         });
         if (!custom_wake_word_->Initialize(codec_, models_)) {
-            ESP_LOGE(TAG, "Failed to initialize MultiNet wake-word detector");
+            // Degrade gracefully instead of failing the whole audio engine:
+            // a PSRAM shortage should only cost voice wake-up (buttons and
+            // the rest of the firmware must keep working).
+            ESP_LOGE(TAG, "Failed to initialize MultiNet wake-word detector; "
+                          "continuing without voice wake-up");
             custom_wake_word_.reset();
             wake_detector_ = WakeDetector::kNone;
-            return false;
         }
     } else if (wakenet_model_name != nullptr) {
         wake_detector_ = WakeDetector::kWakeNet;

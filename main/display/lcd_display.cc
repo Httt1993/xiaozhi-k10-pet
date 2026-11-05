@@ -134,11 +134,13 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
     size_t psram_size_mb = esp_psram_get_size() / 1024 / 1024;
     if (psram_size_mb >= 8) {
 #if CONFIG_LV_USE_BUILTIN_MALLOC
-        // Base TLSF pool is CONFIG_LV_MEM_SIZE_KILOBYTES in PSRAM; grow it so
-        // the 2MB decoded-image cache does not exhaust a 2MB-PSRAM-safe pool.
-        // TLSF rejects any single pool larger than LV_MEM_SIZE when
-        // LV_MEM_POOL_EXPAND_SIZE is 0 (block_size_max = 1 << ceil(log2(LV_MEM_SIZE))).
-        const size_t extra_total = 2560 * 1024;
+        // Base TLSF pool is CONFIG_LV_MEM_SIZE_KILOBYTES in PSRAM; grow it in
+        // chunks (TLSF rejects a single pool larger than LV_MEM_SIZE when
+        // LV_MEM_POOL_EXPAND_SIZE is 0). Keep the total modest: on K10 the
+        // custom wake word uses MultiNet (mn6_cn), which needs PSRAM for its
+        // model and AFE buffers. A 2560KB extra pool left too little free
+        // PSRAM and made multinet->create() fail, crashing the whole device.
+        const size_t extra_total = 1024 * 1024;
         const size_t chunk_size = LV_MEM_SIZE;
         size_t added = 0;
         while (added < extra_total) {
@@ -161,8 +163,12 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
             ESP_LOGI(TAG, "Added %uKB LVGL pool in PSRAM", (unsigned)(added / 1024));
         }
 #endif
-        lv_image_cache_resize(2 * 1024 * 1024, true);
-        ESP_LOGI(TAG, "Use 2MB of PSRAM for image cache");
+        // 512KB is the same limit used on 2MB-PSRAM boards and is plenty for
+        // the pet face (runtime-drawn eyes/mouth + one 240x320 base image).
+        // Leaving the rest of the LVGL pool free keeps PSRAM available for
+        // MultiNet / AFE allocations.
+        lv_image_cache_resize(512 * 1024, true);
+        ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache (PSRAM reserved for MultiNet)");
     } else if (psram_size_mb >= 2) {
         lv_image_cache_resize(512 * 1024, true);
         ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache");
